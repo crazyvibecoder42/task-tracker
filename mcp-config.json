@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "task-tracker": {
+      "command": "python",
+      "args": ["/Users/delusionalmakubex/Documents/projects/experimental/task-tracker/mcp-server/stdio_server.py"],
+      "env": {
+        "TASK_TRACKER_API_URL": "http://localhost:6001"
+      }
+    }
+  }
+}

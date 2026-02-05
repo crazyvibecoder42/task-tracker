@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: task-tracker-db
+    environment:
+      POSTGRES_USER: taskuser
+      POSTGRES_PASSWORD: taskpass
+      POSTGRES_DB: tasktracker
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U taskuser -d tasktracker"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: ./backend
+    container_name: task-tracker-backend
+    ports:
+      - "6001:6001"
+    environment:
+      DATABASE_URL: postgresql://taskuser:taskpass@postgres:5432/tasktracker
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    command: uvicorn main:app --host 0.0.0.0 --port 6001 --reload
+
+  frontend:
+    build: ./frontend
+    container_name: task-tracker-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:6001
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+
+  mcp-server:
+    build: ./mcp-server
+    container_name: task-tracker-mcp
+    ports:
+      - "6000:6000"
+    environment:
+      TASK_TRACKER_API_URL: http://backend:6001
+      MCP_PORT: "6000"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:

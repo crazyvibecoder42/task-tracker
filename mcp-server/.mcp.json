@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "task-tracker": {
+      "command": "python3",
+      "args": ["stdio_server.py"],
+      "env": {
+        "TASK_TRACKER_API_URL": "http://localhost:6001"
+      }
+    }
+  }
+}
