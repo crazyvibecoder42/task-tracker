@@ -269,6 +269,9 @@ export default function TaskDetail() {
                     )}
                   </button>
                   <div>
+                    <div className="mb-2">
+                      <span className="text-sm font-mono text-gray-500">#{task.id}</span>
+                    </div>
                     <h1
                       className={`text-2xl font-bold ${
                         task.status === 'completed'

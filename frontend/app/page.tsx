@@ -138,7 +138,10 @@ export default function Dashboard() {
                       }`}
                     ></span>
                     <div>
-                      <p className="font-medium text-gray-900">{task.title}</p>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-xs text-gray-500">#{task.id}</span>
+                        <p className="font-medium text-gray-900">{task.title}</p>
+                      </div>
                       <div className="flex items-center gap-2 mt-1">
                         <span
                           className={`px-2 py-0.5 text-xs rounded-full ${
