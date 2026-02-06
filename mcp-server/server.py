@@ -167,7 +167,8 @@ async def list_tools() -> list[Tool]:
                     "tag": {"type": "string", "enum": ["bug", "feature", "idea"], "description": "Task tag (default: feature)"},
                     "priority": {"type": "string", "enum": ["P0", "P1"], "description": "Task priority (default: P1)"},
                     "author_id": {"type": "integer", "description": "Author ID (optional)"},
-                    "owner_id": {"type": "integer", "description": "Owner ID (optional)"}
+                    "owner_id": {"type": "integer", "description": "Owner ID (optional)"},
+                    "parent_task_id": {"type": "integer", "description": "Parent task ID to create this as a subtask (optional)"}
                 },
                 "required": ["project_id", "title"]
             }
@@ -195,7 +196,8 @@ async def list_tools() -> list[Tool]:
                     "tag": {"type": "string", "enum": ["bug", "feature", "idea"], "description": "New task tag"},
                     "priority": {"type": "string", "enum": ["P0", "P1"], "description": "New task priority"},
                     "status": {"type": "string", "enum": ["pending", "completed"], "description": "New task status"},
-                    "owner_id": {"type": "integer", "description": "Owner ID (set to null to release ownership)"}
+                    "owner_id": {"type": "integer", "description": "Owner ID (set to null to release ownership)"},
+                    "parent_task_id": {"type": "integer", "description": "Parent task ID to make this a subtask (optional)"}
                 },
                 "required": ["task_id"]
             }
@@ -227,6 +229,79 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="delete_task",
             description="Delete a task",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "integer", "description": "Task ID"}
+                },
+                "required": ["task_id"]
+            }
+        ),
+
+        # Task dependency and subtask tools
+        Tool(
+            name="get_task_subtasks",
+            description="List all subtasks of a task",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "integer", "description": "Task ID"}
+                },
+                "required": ["task_id"]
+            }
+        ),
+        Tool(
+            name="get_task_dependencies",
+            description="Get full dependency graph for a task including subtasks, blocking tasks, and blocked tasks",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "integer", "description": "Task ID"}
+                },
+                "required": ["task_id"]
+            }
+        ),
+        Tool(
+            name="add_task_dependency",
+            description="Add a blocking relationship between tasks (blocking_task must be completed before task can start)",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "integer", "description": "Task ID that will be blocked"},
+                    "blocking_task_id": {"type": "integer", "description": "Task ID that blocks the first task"}
+                },
+                "required": ["task_id", "blocking_task_id"]
+            }
+        ),
+        Tool(
+            name="remove_task_dependency",
+            description="Remove a blocking relationship between tasks",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "integer", "description": "Task ID"},
+                    "blocking_task_id": {"type": "integer", "description": "Blocking task ID to remove"}
+                },
+                "required": ["task_id", "blocking_task_id"]
+            }
+        ),
+        Tool(
+            name="get_actionable_tasks",
+            description="Get tasks that are not blocked and can be worked on immediately. This is critical for identifying what work can be done right now.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer", "description": "Filter by project ID (optional)"},
+                    "owner_id": {"type": "integer", "description": "Filter by owner ID (optional)"},
+                    "priority": {"type": "string", "enum": ["P0", "P1"], "description": "Filter by priority (optional)"},
+                    "tag": {"type": "string", "enum": ["bug", "feature", "idea"], "description": "Filter by tag (optional)"}
+                },
+                "required": []
+            }
+        ),
+        Tool(
+            name="get_task_progress",
+            description="Get completion percentage for a task based on its subtasks",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -375,6 +450,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             data["author_id"] = arguments["author_id"]
         if "owner_id" in arguments:
             data["owner_id"] = arguments["owner_id"]
+        if "parent_task_id" in arguments:
+            data["parent_task_id"] = arguments["parent_task_id"]
         result = await api_request("POST", "/api/tasks", data)
 
     elif name == "get_task":
@@ -382,7 +459,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
     elif name == "update_task":
         data = {}
-        for field in ["title", "description", "tag", "priority", "status", "owner_id"]:
+        for field in ["title", "description", "tag", "priority", "status", "owner_id", "parent_task_id"]:
             if field in arguments:
                 data[field] = arguments[field]
         result = await api_request("PUT", f"/api/tasks/{arguments['task_id']}", data)
@@ -399,6 +476,35 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
     elif name == "delete_task":
         result = await api_request("DELETE", f"/api/tasks/{arguments['task_id']}")
+
+    # Task dependency and subtask tools
+    elif name == "get_task_subtasks":
+        result = await api_request("GET", f"/api/tasks/{arguments['task_id']}/subtasks")
+
+    elif name == "get_task_dependencies":
+        result = await api_request("GET", f"/api/tasks/{arguments['task_id']}/dependencies")
+
+    elif name == "add_task_dependency":
+        data = {"blocking_task_id": arguments["blocking_task_id"]}
+        result = await api_request("POST", f"/api/tasks/{arguments['task_id']}/dependencies", data)
+
+    elif name == "remove_task_dependency":
+        result = await api_request("DELETE", f"/api/tasks/{arguments['task_id']}/dependencies/{arguments['blocking_task_id']}")
+
+    elif name == "get_actionable_tasks":
+        params = {}
+        if "project_id" in arguments:
+            params["project_id"] = arguments["project_id"]
+        if "owner_id" in arguments:
+            params["owner_id"] = arguments["owner_id"]
+        if "priority" in arguments:
+            params["priority"] = arguments["priority"]
+        if "tag" in arguments:
+            params["tag"] = arguments["tag"]
+        result = await api_request("GET", "/api/tasks/actionable", params)
+
+    elif name == "get_task_progress":
+        result = await api_request("GET", f"/api/tasks/{arguments['task_id']}/progress")
 
     # Comment tools
     elif name == "list_comments":

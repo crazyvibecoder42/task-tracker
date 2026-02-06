@@ -81,6 +81,7 @@ class TaskCreate(TaskBase):
     project_id: int
     author_id: Optional[int] = None
     owner_id: Optional[int] = None
+    parent_task_id: Optional[int] = None
 
 
 class TaskUpdate(BaseModel):
@@ -90,6 +91,7 @@ class TaskUpdate(BaseModel):
     priority: Optional[TaskPriority] = None
     status: Optional[TaskStatus] = None
     owner_id: Optional[int] = None
+    parent_task_id: Optional[int] = None
 
 
 class TakeOwnership(BaseModel):
@@ -104,7 +106,9 @@ class Task(TaskBase):
     author: Optional[Author] = None
     owner_id: Optional[int]
     owner: Optional[Author] = None
+    parent_task_id: Optional[int] = None
     comments: List[Comment] = []
+    is_blocked: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -119,12 +123,49 @@ class TaskSummary(TaskBase):
     author: Optional[Author] = None
     owner_id: Optional[int]
     owner: Optional[Author] = None
+    parent_task_id: Optional[int] = None
     comment_count: int = 0
+    is_blocked: bool = False
     created_at: datetime
     updated_at: datetime
 
     class Config:
         from_attributes = True
+
+
+# Task Dependency schemas
+class TaskDependencyBase(BaseModel):
+    blocking_task_id: int
+    blocked_task_id: int
+
+
+class TaskDependencyCreate(BaseModel):
+    blocking_task_id: int
+
+
+class TaskDependency(TaskDependencyBase):
+    id: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class TaskWithDependencies(Task):
+    subtasks: List['TaskSummary'] = []
+    blocking_tasks: List['TaskSummary'] = []  # Tasks that block this one
+    blocked_tasks: List['TaskSummary'] = []   # Tasks that this one blocks
+    is_blocked: bool = False
+
+    class Config:
+        from_attributes = True
+
+
+class TaskProgress(BaseModel):
+    task_id: int
+    total_subtasks: int
+    completed_subtasks: int
+    completion_percentage: float
 
 
 # Project schemas

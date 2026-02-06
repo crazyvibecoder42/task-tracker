@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     author_id INTEGER REFERENCES authors(id) ON DELETE SET NULL,
     owner_id INTEGER REFERENCES authors(id) ON DELETE SET NULL,
+    parent_task_id INTEGER REFERENCES tasks(id) ON DELETE CASCADE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -52,13 +53,26 @@ CREATE TABLE IF NOT EXISTS comments (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Task dependencies table for blocking relationships
+CREATE TABLE IF NOT EXISTS task_dependencies (
+    id SERIAL PRIMARY KEY,
+    blocking_task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    blocked_task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(blocking_task_id, blocked_task_id),
+    CHECK (blocking_task_id != blocked_task_id)
+);
+
 -- Create indexes for better query performance
 CREATE INDEX idx_tasks_project_id ON tasks(project_id);
 CREATE INDEX idx_tasks_status ON tasks(status);
 CREATE INDEX idx_tasks_priority ON tasks(priority);
 CREATE INDEX idx_tasks_tag ON tasks(tag);
 CREATE INDEX idx_tasks_owner_id ON tasks(owner_id);
+CREATE INDEX idx_tasks_parent_task_id ON tasks(parent_task_id);
 CREATE INDEX idx_comments_task_id ON comments(task_id);
+CREATE INDEX idx_task_dependencies_blocking ON task_dependencies(blocking_task_id);
+CREATE INDEX idx_task_dependencies_blocked ON task_dependencies(blocked_task_id);
 
 -- Insert a default author for testing
 INSERT INTO authors (name, email) VALUES ('Admin', 'admin@example.com');

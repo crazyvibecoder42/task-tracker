@@ -11,6 +11,7 @@ ENV/
 *.egg-info/
 dist/
 build/
+*.bak
 
 # Node.js / Next.js
 node_modules/
@@ -47,6 +48,7 @@ coverage/
 # MCP
 .mcp-servers/
 .playwright-mcp/
+.mcp.json
 
 # Screenshots
 *.png

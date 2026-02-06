@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { Bug, CheckCircle2, Circle, Filter, Lightbulb, MessageSquare, Sparkles } from 'lucide-react';
+import { AlertCircle, Bug, CheckCircle2, Circle, Filter, Lightbulb, MessageSquare, Sparkles } from 'lucide-react';
 import { getTasks, updateTask, Task } from '@/lib/api';
 
 export default function TasksPage() {
@@ -207,6 +207,12 @@ export default function TasksPage() {
                     >
                       {task.priority}
                     </span>
+                    {task.is_blocked && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-700 border border-red-200">
+                        <AlertCircle className="w-3 h-3" />
+                        Blocked
+                      </span>
+                    )}
                     {task.author && (
                       <span className="text-xs text-gray-500">by {task.author.name}</span>
                     )}

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
+  AlertCircle,
   ArrowLeft,
   Bug,
   CheckCircle2,
@@ -388,6 +389,12 @@ export default function ProjectDetail() {
                     >
                       {task.priority}
                     </span>
+                    {task.is_blocked && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-700 border border-red-200">
+                        <AlertCircle className="w-3 h-3" />
+                        Blocked
+                      </span>
+                    )}
                     {task.author && (
                       <span className="text-xs text-gray-500">by {task.author.name}</span>
                     )}

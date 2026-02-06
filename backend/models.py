@@ -63,6 +63,7 @@ class Task(Base):
     project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
     author_id = Column(Integer, ForeignKey("authors.id", ondelete="SET NULL"))
     owner_id = Column(Integer, ForeignKey("authors.id", ondelete="SET NULL"))
+    parent_task_id = Column(Integer, ForeignKey("tasks.id", ondelete="CASCADE"))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -71,6 +72,37 @@ class Task(Base):
     author = relationship("Author", foreign_keys=[author_id], back_populates="tasks")
     owner = relationship("Author", foreign_keys=[owner_id], back_populates="owned_tasks")
     comments = relationship("Comment", back_populates="task", cascade="all, delete-orphan")
+
+    # Subtask relationships (self-referential)
+    parent_task = relationship("Task", remote_side=[id], back_populates="subtasks", foreign_keys=[parent_task_id])
+    subtasks = relationship("Task", back_populates="parent_task", cascade="all, delete-orphan", foreign_keys=[parent_task_id])
+
+    # Dependency relationships (many-to-many through task_dependencies)
+    blocking_dependencies = relationship(
+        "TaskDependency",
+        foreign_keys="TaskDependency.blocking_task_id",
+        back_populates="blocking_task",
+        cascade="all, delete-orphan"
+    )
+    blocked_dependencies = relationship(
+        "TaskDependency",
+        foreign_keys="TaskDependency.blocked_task_id",
+        back_populates="blocked_task",
+        cascade="all, delete-orphan"
+    )
+
+
+class TaskDependency(Base):
+    __tablename__ = "task_dependencies"
+
+    id = Column(Integer, primary_key=True, index=True)
+    blocking_task_id = Column(Integer, ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False)
+    blocked_task_id = Column(Integer, ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Relationships
+    blocking_task = relationship("Task", foreign_keys=[blocking_task_id], back_populates="blocking_dependencies")
+    blocked_task = relationship("Task", foreign_keys=[blocked_task_id], back_populates="blocked_dependencies")
 
 
 class Comment(Base):

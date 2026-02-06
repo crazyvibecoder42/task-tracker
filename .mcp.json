@@ -1,10 +1,12 @@
 {
-  "task-tracker": {
-    "type": "stdio",
-    "command": "/Users/delusionalmakubex/.pyenv/shims/python3",
-    "args": ["/Users/delusionalmakubex/.mcp-servers/stdio_server.py"],
-    "env": {
-      "TASK_TRACKER_API_URL": "http://localhost:6001"
+  "mcpServers": {
+    "task-tracker": {
+      "type": "stdio",
+      "command": "/Users/delusionalmakubex/.pyenv/shims/python3",
+      "args": ["/Users/delusionalmakubex/.mcp-servers/stdio_server.py"],
+      "env": {
+        "TASK_TRACKER_API_URL": "http://localhost:6001"
+      }
     }
   }
 }

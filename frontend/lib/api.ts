@@ -31,8 +31,27 @@ export interface Task {
   owner: Author | null;
   comments: Comment[];
   comment_count?: number;
+  parent_task_id?: number;
+  subtasks?: Task[];
+  blocking_tasks?: Task[];
+  blocked_tasks?: Task[];
+  is_blocked?: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export interface TaskDependency {
+  id: number;
+  blocking_task_id: number;
+  blocked_task_id: number;
+  created_at: string;
+}
+
+export interface TaskProgress {
+  task_id: number;
+  total_subtasks: number;
+  completed_subtasks: number;
+  completion_percentage: number;
 }
 
 export interface Project {
@@ -123,6 +142,7 @@ export const createTask = (data: {
   tag?: 'bug' | 'feature' | 'idea';
   priority?: 'P0' | 'P1';
   author_id?: number;
+  parent_task_id?: number;
 }) => fetchApi<Task>('/api/tasks', { method: 'POST', body: JSON.stringify(data) });
 export const updateTask = (id: number, data: {
   title?: string;
@@ -131,9 +151,34 @@ export const updateTask = (id: number, data: {
   priority?: 'P0' | 'P1';
   status?: 'pending' | 'completed';
   owner_id?: number | null;
+  parent_task_id?: number;
 }) => fetchApi<Task>('/api/tasks/' + id, { method: 'PUT', body: JSON.stringify(data) });
 export const deleteTask = (id: number) =>
   fetchApi<void>('/api/tasks/' + id, { method: 'DELETE' });
+
+// Task Dependencies and Subtasks
+export const getTaskSubtasks = (taskId: number) =>
+  fetchApi<Task[]>('/api/tasks/' + taskId + '/subtasks');
+export const getTaskDependencies = (taskId: number) =>
+  fetchApi<Task>('/api/tasks/' + taskId + '/dependencies');
+export const addTaskDependency = (taskId: number, blockingTaskId: number) =>
+  fetchApi<TaskDependency>('/api/tasks/' + taskId + '/dependencies', {
+    method: 'POST',
+    body: JSON.stringify({ blocking_task_id: blockingTaskId })
+  });
+export const removeTaskDependency = (taskId: number, blockingTaskId: number) =>
+  fetchApi<void>('/api/tasks/' + taskId + '/dependencies/' + blockingTaskId, {
+    method: 'DELETE'
+  });
+export const getActionableTasks = (params?: { project_id?: number; owner_id?: number }) => {
+  const searchParams = new URLSearchParams();
+  if (params?.project_id) searchParams.append('project_id', String(params.project_id));
+  if (params?.owner_id) searchParams.append('owner_id', String(params.owner_id));
+  const query = searchParams.toString();
+  return fetchApi<Task[]>('/api/tasks/actionable' + (query ? '?' + query : ''));
+};
+export const getTaskProgress = (taskId: number) =>
+  fetchApi<TaskProgress>('/api/tasks/' + taskId + '/progress');
 
 // Comments
 export const getComments = (taskId: number) => fetchApi<Comment[]>('/api/tasks/' + taskId + '/comments');
