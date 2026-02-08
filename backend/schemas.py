@@ -15,9 +15,23 @@ class TaskPriority(str, Enum):
     P1 = "P1"
 
 
+class TaskEventType(str, Enum):
+    task_created = "task_created"
+    status_change = "status_change"
+    field_update = "field_update"
+    ownership_change = "ownership_change"
+    dependency_added = "dependency_added"
+    dependency_removed = "dependency_removed"
+    comment_added = "comment_added"
+
+
 class TaskStatus(str, Enum):
-    pending = "pending"
-    completed = "completed"
+    backlog = "backlog"
+    todo = "todo"
+    in_progress = "in_progress"
+    blocked = "blocked"
+    review = "review"
+    done = "done"
 
 
 # Author schemas
@@ -68,13 +82,38 @@ class Comment(CommentBase):
         from_attributes = True
 
 
+# Task Event schemas
+class TaskEventBase(BaseModel):
+    task_id: int
+    event_type: TaskEventType
+    actor_id: Optional[int] = None
+    field_name: Optional[str] = None
+    old_value: Optional[str] = None
+    new_value: Optional[str] = None
+    event_metadata: Optional[dict] = None
+
+
+class TaskEvent(TaskEventBase):
+    id: int
+    created_at: datetime
+    actor: Optional[Author] = None
+
+    class Config:
+        from_attributes = True
+
+
+class TaskEventsList(BaseModel):
+    events: List[TaskEvent] = []
+    total: int
+
+
 # Task schemas
 class TaskBase(BaseModel):
     title: str
     description: Optional[str] = None
     tag: TaskTag = TaskTag.feature
     priority: TaskPriority = TaskPriority.P1
-    status: TaskStatus = TaskStatus.pending
+    status: TaskStatus = TaskStatus.todo
 
 
 class TaskCreate(TaskBase):
@@ -205,8 +244,12 @@ class ProjectStats(BaseModel):
     id: int
     name: str
     total_tasks: int
-    pending_tasks: int
-    completed_tasks: int
+    backlog_tasks: int
+    todo_tasks: int
+    in_progress_tasks: int
+    blocked_tasks: int
+    review_tasks: int
+    done_tasks: int
     p0_tasks: int
     p1_tasks: int
     bug_count: int

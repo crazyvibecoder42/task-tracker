@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { AlertCircle, Bug, CheckCircle2, Circle, Filter, Lightbulb, MessageSquare, Sparkles } from 'lucide-react';
+import { AlertCircle, Bug, Filter, Lightbulb, MessageSquare, Sparkles } from 'lucide-react';
 import { getTasks, updateTask, Task } from '@/lib/api';
+import { STATUS_CONFIG, TaskStatus } from '@/components/StatusConfig';
 
 export default function TasksPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -31,11 +32,9 @@ export default function TasksPage() {
     }
   };
 
-  const handleToggleStatus = async (task: Task) => {
+  const handleStatusChange = async (taskId: number, newStatus: TaskStatus) => {
     try {
-      await updateTask(task.id, {
-        status: task.status === 'pending' ? 'completed' : 'pending'
-      });
+      await updateTask(taskId, { status: newStatus });
       loadTasks();
     } catch (error) {
       console.error('Failed to update task:', error);
@@ -91,8 +90,12 @@ export default function TasksPage() {
             className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm"
           >
             <option value="">All Status</option>
-            <option value="pending">Pending</option>
-            <option value="completed">Completed</option>
+            <option value="backlog">Backlog</option>
+            <option value="todo">To Do</option>
+            <option value="in_progress">In Progress</option>
+            <option value="blocked">Blocked</option>
+            <option value="review">Review</option>
+            <option value="done">Done</option>
           </select>
           <select
             value={priorityFilter}
@@ -141,25 +144,13 @@ export default function TasksPage() {
                 key={task.id}
                 className="p-4 flex items-start gap-4 hover:bg-gray-50 transition-colors"
               >
-                <button
-                  onClick={() => handleToggleStatus(task)}
-                  className={`mt-1 flex-shrink-0 ${
-                    task.status === 'completed' ? 'text-green-600' : 'text-gray-400'
-                  }`}
-                >
-                  {task.status === 'completed' ? (
-                    <CheckCircle2 className="w-5 h-5" />
-                  ) : (
-                    <Circle className="w-5 h-5" />
-                  )}
-                </button>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-3 mb-1">
                     <span className="font-mono text-sm text-gray-500">#{task.id}</span>
                     <Link
                       href={`/tasks/${task.id}`}
                       className={`font-medium hover:text-indigo-600 ${
-                        task.status === 'completed' ? 'line-through text-gray-500' : 'text-gray-900'
+                        task.status === 'done' ? 'line-through text-gray-500' : 'text-gray-900'
                       }`}
                     >
                       {task.title}
@@ -185,6 +176,16 @@ export default function TasksPage() {
                     >
                       Project #{task.project_id}
                     </Link>
+                    <span className="text-gray-300">•</span>
+                    {(() => {
+                      const StatusIcon = STATUS_CONFIG[task.status].icon;
+                      return (
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full border ${STATUS_CONFIG[task.status].color}`}>
+                          <StatusIcon className="w-3 h-3" />
+                          {STATUS_CONFIG[task.status].label}
+                        </span>
+                      );
+                    })()}
                     <span className="text-gray-300">•</span>
                     <span
                       className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full ${

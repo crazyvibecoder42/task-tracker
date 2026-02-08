@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { AlertCircle, CheckCircle2, Clock, FolderKanban, TrendingUp } from 'lucide-react';
+import { AlertCircle, Clock, FolderKanban, TrendingUp, Inbox, Circle, PlayCircle, XCircle, Eye, CheckCircle2 } from 'lucide-react';
 import { getOverallStats, getProjects, getTasks, OverallStats, Project, Task } from '@/lib/api';
+import { STATUS_CONFIG } from '@/components/StatusConfig';
 
 export default function Dashboard() {
   const [stats, setStats] = useState<OverallStats | null>(null);
@@ -48,7 +49,7 @@ export default function Dashboard() {
       </div>
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 mb-8">
         <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
           <div className="flex items-center justify-between">
             <div>
@@ -64,11 +65,11 @@ export default function Dashboard() {
         <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-gray-500">Pending Tasks</p>
-              <p className="text-2xl font-bold text-gray-900">{stats?.pending_tasks || 0}</p>
+              <p className="text-sm text-gray-500">Backlog</p>
+              <p className="text-2xl font-bold text-gray-900">{stats?.backlog_tasks || 0}</p>
             </div>
-            <div className="p-3 bg-yellow-50 rounded-lg">
-              <Clock className="w-6 h-6 text-yellow-600" />
+            <div className="p-3 bg-gray-50 rounded-lg">
+              <Inbox className="w-6 h-6 text-gray-600" />
             </div>
           </div>
         </div>
@@ -76,8 +77,56 @@ export default function Dashboard() {
         <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-gray-500">Completed Tasks</p>
-              <p className="text-2xl font-bold text-gray-900">{stats?.completed_tasks || 0}</p>
+              <p className="text-sm text-gray-500">To Do</p>
+              <p className="text-2xl font-bold text-gray-900">{stats?.todo_tasks || 0}</p>
+            </div>
+            <div className="p-3 bg-blue-50 rounded-lg">
+              <Circle className="w-6 h-6 text-blue-600" />
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-gray-500">In Progress</p>
+              <p className="text-2xl font-bold text-gray-900">{stats?.in_progress_tasks || 0}</p>
+            </div>
+            <div className="p-3 bg-yellow-50 rounded-lg">
+              <PlayCircle className="w-6 h-6 text-yellow-600" />
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-gray-500">Blocked</p>
+              <p className="text-2xl font-bold text-gray-900">{stats?.blocked_tasks || 0}</p>
+            </div>
+            <div className="p-3 bg-red-50 rounded-lg">
+              <XCircle className="w-6 h-6 text-red-600" />
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-gray-500">Review</p>
+              <p className="text-2xl font-bold text-gray-900">{stats?.review_tasks || 0}</p>
+            </div>
+            <div className="p-3 bg-purple-50 rounded-lg">
+              <Eye className="w-6 h-6 text-purple-600" />
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-gray-500">Done</p>
+              <p className="text-2xl font-bold text-gray-900">{stats?.done_tasks || 0}</p>
             </div>
             <div className="p-3 bg-green-50 rounded-lg">
               <CheckCircle2 className="w-6 h-6 text-green-600" />
@@ -88,8 +137,8 @@ export default function Dashboard() {
         <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-gray-500">P0 Pending</p>
-              <p className="text-2xl font-bold text-gray-900">{stats?.p0_pending || 0}</p>
+              <p className="text-sm text-gray-500">P0 Incomplete</p>
+              <p className="text-2xl font-bold text-gray-900">{stats?.p0_incomplete || 0}</p>
             </div>
             <div className="p-3 bg-red-50 rounded-lg">
               <AlertCircle className="w-6 h-6 text-red-600" />
@@ -132,11 +181,16 @@ export default function Dashboard() {
                   className="flex items-center justify-between p-4 hover:bg-gray-50 transition-colors"
                 >
                   <div className="flex items-center gap-3">
-                    <span
-                      className={`w-2 h-2 rounded-full ${
-                        task.status === 'completed' ? 'bg-green-500' : 'bg-yellow-500'
-                      }`}
-                    ></span>
+                    {(() => {
+                      const StatusIcon = STATUS_CONFIG[task.status].icon;
+                      const statusColor = task.status === 'done' ? 'text-green-500' :
+                                         task.status === 'in_progress' ? 'text-yellow-500' :
+                                         task.status === 'blocked' ? 'text-red-500' :
+                                         task.status === 'review' ? 'text-purple-500' :
+                                         task.status === 'todo' ? 'text-blue-500' :
+                                         'text-gray-500';
+                      return <StatusIcon className={`w-4 h-4 ${statusColor}`} />;
+                    })()}
                     <div>
                       <div className="flex items-center gap-2">
                         <span className="font-mono text-xs text-gray-500">#{task.id}</span>

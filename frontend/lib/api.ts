@@ -1,4 +1,4 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:6001';
 
 export interface Author {
   id: number;
@@ -23,7 +23,7 @@ export interface Task {
   description: string | null;
   tag: 'bug' | 'feature' | 'idea';
   priority: 'P0' | 'P1';
-  status: 'pending' | 'completed';
+  status: 'backlog' | 'todo' | 'in_progress' | 'blocked' | 'review' | 'done';
   project_id: number;
   author_id: number | null;
   author: Author | null;
@@ -38,6 +38,19 @@ export interface Task {
   is_blocked?: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export interface TaskEvent {
+  id: number;
+  task_id: number;
+  event_type: string;
+  field_name: string | null;
+  old_value: string | null;
+  new_value: string | null;
+  actor_id: number | null;
+  actor: Author | null;
+  created_at: string;
+  metadata: Record<string, any> | null;
 }
 
 export interface TaskDependency {
@@ -69,8 +82,12 @@ export interface ProjectStats {
   id: number;
   name: string;
   total_tasks: number;
-  pending_tasks: number;
-  completed_tasks: number;
+  backlog_tasks: number;
+  todo_tasks: number;
+  in_progress_tasks: number;
+  blocked_tasks: number;
+  review_tasks: number;
+  done_tasks: number;
   p0_tasks: number;
   p1_tasks: number;
   bug_count: number;
@@ -81,9 +98,13 @@ export interface ProjectStats {
 export interface OverallStats {
   total_projects: number;
   total_tasks: number;
-  pending_tasks: number;
-  completed_tasks: number;
-  p0_pending: number;
+  backlog_tasks: number;
+  todo_tasks: number;
+  in_progress_tasks: number;
+  blocked_tasks: number;
+  review_tasks: number;
+  done_tasks: number;
+  p0_incomplete: number;
   completion_rate: number;
 }
 
@@ -149,7 +170,7 @@ export const updateTask = (id: number, data: {
   description?: string;
   tag?: 'bug' | 'feature' | 'idea';
   priority?: 'P0' | 'P1';
-  status?: 'pending' | 'completed';
+  status?: 'backlog' | 'todo' | 'in_progress' | 'blocked' | 'review' | 'done';
   owner_id?: number | null;
   parent_task_id?: number;
 }) => fetchApi<Task>('/api/tasks/' + id, { method: 'PUT', body: JSON.stringify(data) });
@@ -179,6 +200,37 @@ export const getActionableTasks = (params?: { project_id?: number; owner_id?: nu
 };
 export const getTaskProgress = (taskId: number) =>
   fetchApi<TaskProgress>('/api/tasks/' + taskId + '/progress');
+
+// Task Events
+export const getTaskEvents = (taskId: number, params?: {
+  event_type?: string;
+  limit?: number;
+  offset?: number;
+}) => {
+  const searchParams = new URLSearchParams();
+  if (params?.event_type) searchParams.append('event_type', params.event_type);
+  if (params?.limit) searchParams.append('limit', String(params.limit));
+  if (params?.offset) searchParams.append('offset', String(params.offset));
+  const query = searchParams.toString();
+  return fetchApi<{ events: TaskEvent[]; total_count: number }>(
+    '/api/tasks/' + taskId + '/events' + (query ? '?' + query : '')
+  );
+};
+
+export const getProjectEvents = (projectId: number, params?: {
+  event_type?: string;
+  limit?: number;
+  offset?: number;
+}) => {
+  const searchParams = new URLSearchParams();
+  if (params?.event_type) searchParams.append('event_type', params.event_type);
+  if (params?.limit) searchParams.append('limit', String(params.limit));
+  if (params?.offset) searchParams.append('offset', String(params.offset));
+  const query = searchParams.toString();
+  return fetchApi<{ events: TaskEvent[]; total_count: number }>(
+    '/api/projects/' + projectId + '/events' + (query ? '?' + query : '')
+  );
+};
 
 // Comments
 export const getComments = (taskId: number) => fetchApi<Comment[]>('/api/tasks/' + taskId + '/comments');

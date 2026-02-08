@@ -93,7 +93,7 @@ async def list_tools() -> list[Tool]:
         Tool(name="list_tasks", description="List tasks with optional filters",
              inputSchema={"type": "object", "properties": {
                  "project_id": {"type": "integer", "description": "Filter by project ID"},
-                 "status": {"type": "string", "enum": ["pending", "completed"], "description": "Filter by status"},
+                 "status": {"type": "string", "enum": ["backlog", "todo", "in_progress", "blocked", "review", "done"], "description": "Filter by status"},
                  "priority": {"type": "string", "enum": ["P0", "P1"], "description": "Filter by priority"},
                  "tag": {"type": "string", "enum": ["bug", "feature", "idea"], "description": "Filter by tag"},
                  "owner_id": {"type": "integer", "description": "Filter by owner ID (use 0 for unassigned tasks)"}
@@ -119,7 +119,7 @@ async def list_tools() -> list[Tool]:
                  "description": {"type": "string", "description": "New task description"},
                  "tag": {"type": "string", "enum": ["bug", "feature", "idea"], "description": "New task tag"},
                  "priority": {"type": "string", "enum": ["P0", "P1"], "description": "New task priority"},
-                 "status": {"type": "string", "enum": ["pending", "completed"], "description": "New task status"},
+                 "status": {"type": "string", "enum": ["backlog", "todo", "in_progress", "blocked", "review", "done"], "description": "New task status"},
                  "owner_id": {"type": "integer", "description": "Owner ID (set to null to release ownership)"}
              }, "required": ["task_id"]}),
         Tool(name="complete_task", description="Mark a task as completed",
@@ -158,7 +158,21 @@ async def list_tools() -> list[Tool]:
                  "email": {"type": "string", "description": "Author email"}
              }, "required": ["name", "email"]}),
         Tool(name="get_stats", description="Get overall task tracker statistics",
-             inputSchema={"type": "object", "properties": {}, "required": []})
+             inputSchema={"type": "object", "properties": {}, "required": []}),
+        Tool(name="get_task_events", description="Get timeline of events for a task with optional filtering",
+             inputSchema={"type": "object", "properties": {
+                 "task_id": {"type": "integer", "description": "Task ID"},
+                 "event_type": {"type": "string", "description": "Filter by event type (optional)"},
+                 "limit": {"type": "integer", "description": "Max events to return (default: 100, max: 500)"},
+                 "offset": {"type": "integer", "description": "Pagination offset (default: 0)"}
+             }, "required": ["task_id"]}),
+        Tool(name="get_project_events", description="Get timeline of events across all tasks in a project",
+             inputSchema={"type": "object", "properties": {
+                 "project_id": {"type": "integer", "description": "Project ID"},
+                 "event_type": {"type": "string", "description": "Filter by event type (optional)"},
+                 "limit": {"type": "integer", "description": "Max events to return (default: 100, max: 500)"},
+                 "offset": {"type": "integer", "description": "Pagination offset (default: 0)"}
+             }, "required": ["project_id"]})
     ]
 
 
@@ -204,7 +218,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         data = {k: arguments[k] for k in ["title", "description", "tag", "priority", "status", "owner_id"] if k in arguments}
         result = await api_request("PUT", f"/api/tasks/{arguments['task_id']}", data)
     elif name == "complete_task":
-        result = await api_request("PUT", f"/api/tasks/{arguments['task_id']}", {"status": "completed"})
+        result = await api_request("PUT", f"/api/tasks/{arguments['task_id']}", {"status": "done"})
     elif name == "take_ownership":
         data = {"author_id": arguments["author_id"], "force": arguments.get("force", False)}
         result = await api_request("POST", f"/api/tasks/{arguments['task_id']}/take-ownership", data)
@@ -224,6 +238,24 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         result = await api_request("POST", "/api/authors", {"name": arguments["name"], "email": arguments["email"]})
     elif name == "get_stats":
         result = await api_request("GET", "/api/stats")
+    elif name == "get_task_events":
+        params = {}
+        if "event_type" in arguments:
+            params["event_type"] = arguments["event_type"]
+        if "limit" in arguments:
+            params["limit"] = arguments["limit"]
+        if "offset" in arguments:
+            params["offset"] = arguments["offset"]
+        result = await api_request("GET", f"/api/tasks/{arguments['task_id']}/events", params)
+    elif name == "get_project_events":
+        params = {}
+        if "event_type" in arguments:
+            params["event_type"] = arguments["event_type"]
+        if "limit" in arguments:
+            params["limit"] = arguments["limit"]
+        if "offset" in arguments:
+            params["offset"] = arguments["offset"]
+        result = await api_request("GET", f"/api/projects/{arguments['project_id']}/events", params)
     else:
         result = {"error": f"Unknown tool: {name}"}
 

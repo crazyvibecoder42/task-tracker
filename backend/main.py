@@ -166,8 +166,12 @@ def get_project_stats(project_id: int, db: Session = Depends(get_db)):
         id=project.id,
         name=project.name,
         total_tasks=len(tasks),
-        pending_tasks=sum(1 for t in tasks if t.status == models.TaskStatus.pending),
-        completed_tasks=sum(1 for t in tasks if t.status == models.TaskStatus.completed),
+        backlog_tasks=sum(1 for t in tasks if t.status == models.TaskStatus.backlog),
+        todo_tasks=sum(1 for t in tasks if t.status == models.TaskStatus.todo),
+        in_progress_tasks=sum(1 for t in tasks if t.status == models.TaskStatus.in_progress),
+        blocked_tasks=sum(1 for t in tasks if t.status == models.TaskStatus.blocked),
+        review_tasks=sum(1 for t in tasks if t.status == models.TaskStatus.review),
+        done_tasks=sum(1 for t in tasks if t.status == models.TaskStatus.done),
         p0_tasks=sum(1 for t in tasks if t.priority == models.TaskPriority.P0),
         p1_tasks=sum(1 for t in tasks if t.priority == models.TaskPriority.P1),
         bug_count=sum(1 for t in tasks if t.tag == models.TaskTag.bug),
@@ -203,6 +207,52 @@ def delete_project(project_id: int, db: Session = Depends(get_db)):
 
 
 # ============== Helper Functions ==============
+
+def create_task_event(
+    db: Session,
+    task_id: int,
+    event_type: models.TaskEventType,
+    actor_id: Optional[int] = None,
+    field_name: Optional[str] = None,
+    old_value: Optional[str] = None,
+    new_value: Optional[str] = None,
+    metadata: Optional[dict] = None
+) -> models.TaskEvent:
+    """
+    Create a task event for audit trail and timeline feature.
+
+    Args:
+        db: Database session
+        task_id: ID of the task
+        event_type: Type of event (from TaskEventType enum)
+        actor_id: ID of the user who triggered the event (optional)
+        field_name: Name of the field that changed (for field_update and status_change)
+        old_value: Previous value (optional)
+        new_value: New value (optional)
+        metadata: Additional context as JSONB (optional)
+
+    Returns:
+        Created TaskEvent instance
+    """
+    logger.debug(f"Creating event: type={event_type}, task_id={task_id}, actor_id={actor_id}, field={field_name}")
+
+    event = models.TaskEvent(
+        task_id=task_id,
+        event_type=event_type,
+        actor_id=actor_id,
+        field_name=field_name,
+        old_value=old_value,
+        new_value=new_value,
+        event_metadata=metadata
+    )
+
+    db.add(event)
+    db.commit()
+    db.refresh(event)
+
+    logger.debug(f"Event created: id={event.id}, type={event_type}")
+    return event
+
 
 def has_circular_subtask(db: Session, task_id: int, parent_task_id: int) -> bool:
     """
@@ -294,9 +344,9 @@ def has_circular_dependency(db: Session, blocking_task_id: int, blocked_task_id:
 def calculate_is_blocked(db: Session, task_id: int) -> bool:
     """
     Calculate if a task is blocked by checking if it has any blocking dependencies
-    with status=pending.
+    with status != done.
 
-    Returns True if task has any pending blocking dependencies, False otherwise.
+    Returns True if task has any incomplete blocking dependencies, False otherwise.
     """
     logger.debug(f"Calculating is_blocked for task {task_id}")
 
@@ -315,9 +365,9 @@ def calculate_is_blocked(db: Session, task_id: int) -> bool:
         .filter(models.Task.id.in_(blocking_task_ids))\
         .all()
 
-    # Check if any blocking task is pending
-    is_blocked = any(bt.status == models.TaskStatus.pending for bt in blocking_tasks)
-    logger.debug(f"Task {task_id} is_blocked={is_blocked} ({len([bt for bt in blocking_tasks if bt.status == models.TaskStatus.pending])} pending blockers)")
+    # Check if any blocking task is not done
+    is_blocked = any(bt.status != models.TaskStatus.done for bt in blocking_tasks)
+    logger.debug(f"Task {task_id} is_blocked={is_blocked} ({len([bt for bt in blocking_tasks if bt.status != models.TaskStatus.done])} incomplete blockers)")
 
     return is_blocked
 
@@ -405,9 +455,9 @@ def bulk_calculate_is_blocked(db: Session, task_ids: list[int]) -> dict[int, boo
     result = {}
     for task_id in task_ids:
         if task_id in blocked_by_map:
-            # Task is blocked if any of its blocking tasks are pending
+            # Task is blocked if any of its blocking tasks are not done
             result[task_id] = any(
-                status == models.TaskStatus.pending
+                status != models.TaskStatus.done
                 for status in blocked_by_map[task_id]
             )
         else:
@@ -515,6 +565,21 @@ def create_task(task: schemas.TaskCreate, db: Session = Depends(get_db)):
     db.add(db_task)
     db.commit()
     db.refresh(db_task)
+
+    # Create task_created event
+    create_task_event(
+        db=db,
+        task_id=db_task.id,
+        event_type=models.TaskEventType.task_created,
+        actor_id=task.author_id,
+        metadata={
+            "title": db_task.title,
+            "status": db_task.status.value,
+            "priority": db_task.priority.value,
+            "tag": db_task.tag.value
+        }
+    )
+
     logger.info(f"Task created successfully: id={db_task.id}")
     return db_task
 
@@ -528,20 +593,24 @@ def get_actionable_tasks(
     db: Session = Depends(get_db)
 ):
     """
-    Query unblocked, pending tasks.
-    Returns tasks with status=pending that have no blocking dependencies
+    Query unblocked, actionable tasks.
+    Returns tasks that are not in backlog, blocked, or done status and have no blocking dependencies
     or all blocking tasks are completed.
     """
     logger.debug(f"Getting actionable tasks with filters: project_id={project_id}, owner_id={owner_id}, priority={priority}, tag={tag}")
 
-    # Start with pending tasks
+    # Start with tasks excluding backlog, blocked, and done
     query = db.query(models.Task)\
         .options(
             joinedload(models.Task.author),
             joinedload(models.Task.owner),
             joinedload(models.Task.comments)
         )\
-        .filter(models.Task.status == models.TaskStatus.pending)
+        .filter(models.Task.status.notin_([
+            models.TaskStatus.backlog,
+            models.TaskStatus.blocked,
+            models.TaskStatus.done
+        ]))
 
     # Apply optional filters
     if project_id:
@@ -554,7 +623,7 @@ def get_actionable_tasks(
         query = query.filter(models.Task.tag == tag)
 
     tasks = query.all()
-    logger.debug(f"Found {len(tasks)} pending tasks before filtering blocked tasks")
+    logger.debug(f"Found {len(tasks)} actionable tasks before filtering blocked tasks")
 
     # Filter out blocked tasks
     actionable_tasks = []
@@ -571,7 +640,7 @@ def get_actionable_tasks(
             logger.debug(f"Task {task.id} has no blocking dependencies, is actionable")
             actionable_tasks.append(task)
         else:
-            # Check if all blocking tasks are completed
+            # Check if all blocking tasks are done
             blocking_task_ids = [dep.blocking_task_id for dep in blocking_deps]
             blocking_tasks = db.query(models.Task)\
                 .filter(models.Task.id.in_(blocking_task_ids))\
@@ -579,12 +648,12 @@ def get_actionable_tasks(
 
             logger.debug(f"Task {task.id} has {len(blocking_tasks)} blocking task(s)")
 
-            # Task is actionable if all blocking tasks are completed
-            if all(bt.status == models.TaskStatus.completed for bt in blocking_tasks):
+            # Task is actionable if all blocking tasks are done
+            if all(bt.status == models.TaskStatus.done for bt in blocking_tasks):
                 logger.debug(f"Task {task.id} is actionable, all blocking tasks completed")
                 actionable_tasks.append(task)
             else:
-                logger.debug(f"Task {task.id} is blocked by {sum(1 for bt in blocking_tasks if bt.status == models.TaskStatus.pending)} pending task(s)")
+                logger.debug(f"Task {task.id} is blocked by {sum(1 for bt in blocking_tasks if bt.status != models.TaskStatus.done)} incomplete task(s)")
 
     logger.info(f"Found {len(actionable_tasks)} actionable tasks")
 
@@ -707,7 +776,7 @@ def get_task_progress(task_id: int, db: Session = Depends(get_db)):
     subtasks = db.query(models.Task).filter(models.Task.parent_task_id == task_id).all()
 
     total_subtasks = len(subtasks)
-    completed_subtasks = sum(1 for s in subtasks if s.status == models.TaskStatus.completed)
+    completed_subtasks = sum(1 for s in subtasks if s.status == models.TaskStatus.done)
 
     completion_percentage = (completed_subtasks / total_subtasks * 100) if total_subtasks > 0 else 0.0
 
@@ -731,33 +800,33 @@ def update_task(task_id: int, task_update: schemas.TaskUpdate, db: Session = Dep
 
     update_data = task_update.model_dump(exclude_unset=True)
 
-    # Validate status change to completed
-    if 'status' in update_data and update_data['status'] == models.TaskStatus.completed:
+    # Validate status change to done
+    if 'status' in update_data and update_data['status'] == models.TaskStatus.done:
         logger.debug(f"Validating completion of task {task_id}")
 
-        # Check if task has pending subtasks
-        pending_subtasks = db.query(models.Task).filter(
+        # Check if task has incomplete subtasks
+        incomplete_subtasks = db.query(models.Task).filter(
             models.Task.parent_task_id == task_id,
-            models.Task.status == models.TaskStatus.pending
+            models.Task.status != models.TaskStatus.done
         ).count()
 
-        if pending_subtasks > 0:
-            logger.info(f"Task {task_id} cannot be completed: has {pending_subtasks} pending subtask(s)")
+        if incomplete_subtasks > 0:
+            logger.info(f"Task {task_id} cannot be marked as done: has {incomplete_subtasks} incomplete subtask(s)")
             raise HTTPException(
                 status_code=400,
-                detail=f"Cannot complete task with {pending_subtasks} pending subtask(s)"
+                detail=f"Cannot mark task as done with {incomplete_subtasks} incomplete subtask(s)"
             )
 
         # Check if task is blocked by other tasks
         is_blocked = calculate_is_blocked(db, task_id)
         if is_blocked:
-            logger.info(f"Task {task_id} cannot be completed: is blocked by pending dependencies")
+            logger.info(f"Task {task_id} cannot be marked as done: is blocked by incomplete dependencies")
             raise HTTPException(
                 status_code=400,
-                detail="Cannot complete task while it is blocked by pending dependencies"
+                detail="Cannot mark task as done while it is blocked by incomplete dependencies"
             )
 
-        logger.debug(f"Task {task_id} can be completed")
+        logger.debug(f"Task {task_id} can be marked as done")
 
     # Validate parent_task_id change
     if 'parent_task_id' in update_data and update_data['parent_task_id'] is not None:
@@ -787,11 +856,58 @@ def update_task(task_id: int, task_update: schemas.TaskUpdate, db: Session = Dep
             )
         logger.debug(f"Parent task validation successful")
 
+    # Track old values for event tracking
+    old_values = {key: getattr(task, key) for key in update_data.keys()}
+
     for key, value in update_data.items():
         setattr(task, key, value)
 
     db.commit()
     db.refresh(task)
+
+    # Create events for each changed field
+    for field_name, new_value in update_data.items():
+        old_value = old_values[field_name]
+
+        # Convert enum values to strings for comparison and storage
+        old_str = old_value.value if hasattr(old_value, 'value') else str(old_value) if old_value is not None else None
+        new_str = new_value.value if hasattr(new_value, 'value') else str(new_value) if new_value is not None else None
+
+        # Only create event if value actually changed
+        if old_str != new_str:
+            if field_name == 'status':
+                # Status change gets its own event type
+                create_task_event(
+                    db=db,
+                    task_id=task_id,
+                    event_type=models.TaskEventType.status_change,
+                    actor_id=None,  # Could be extracted from request context if available
+                    field_name='status',
+                    old_value=old_str,
+                    new_value=new_str
+                )
+            else:
+                # Other field changes use field_update event type
+                create_task_event(
+                    db=db,
+                    task_id=task_id,
+                    event_type=models.TaskEventType.field_update,
+                    actor_id=None,  # Could be extracted from request context if available
+                    field_name=field_name,
+                    old_value=old_str,
+                    new_value=new_str
+                )
+            logger.debug(f"Event created for field '{field_name}': {old_str} -> {new_str}")
+
+    # Reload task with relationships
+    task = db.query(models.Task)\
+        .options(
+            joinedload(models.Task.author),
+            joinedload(models.Task.owner),
+            joinedload(models.Task.comments).joinedload(models.Comment.author)
+        )\
+        .filter(models.Task.id == task_id)\
+        .first()
 
     # Calculate is_blocked field (task state may have changed)
     is_blocked = calculate_is_blocked(db, task_id)
@@ -825,9 +941,23 @@ def take_ownership(task_id: int, ownership: schemas.TakeOwnership, db: Session =
             detail=f"Task already owned by author ID {task.owner_id}. Use force=true to reassign."
         )
 
+    # Track old owner for event
+    old_owner_id = task.owner_id
+
     # Assign ownership
     task.owner_id = ownership.author_id
     db.commit()
+
+    # Create ownership_change event
+    create_task_event(
+        db=db,
+        task_id=task_id,
+        event_type=models.TaskEventType.ownership_change,
+        actor_id=ownership.author_id,
+        old_value=str(old_owner_id) if old_owner_id is not None else None,
+        new_value=str(ownership.author_id),
+        metadata={"force": ownership.force}
+    )
 
     # Refresh and load relationships
     db.refresh(task)
@@ -886,6 +1016,15 @@ def create_comment(task_id: int, comment: schemas.CommentCreate, db: Session = D
     db.commit()
     db.refresh(db_comment)
 
+    # Create comment_added event
+    create_task_event(
+        db=db,
+        task_id=task_id,
+        event_type=models.TaskEventType.comment_added,
+        actor_id=comment.author_id,
+        metadata={"comment_id": db_comment.id, "content_preview": comment.content[:100]}
+    )
+
     # Load author relationship
     db_comment = db.query(models.Comment)\
         .options(joinedload(models.Comment.author))\
@@ -927,22 +1066,134 @@ def delete_comment(comment_id: int, db: Session = Depends(get_db)):
 def get_overall_stats(db: Session = Depends(get_db)):
     total_projects = db.query(models.Project).count()
     total_tasks = db.query(models.Task).count()
-    pending_tasks = db.query(models.Task).filter(models.Task.status == models.TaskStatus.pending).count()
-    completed_tasks = db.query(models.Task).filter(models.Task.status == models.TaskStatus.completed).count()
+    backlog_tasks = db.query(models.Task).filter(models.Task.status == models.TaskStatus.backlog).count()
+    todo_tasks = db.query(models.Task).filter(models.Task.status == models.TaskStatus.todo).count()
+    in_progress_tasks = db.query(models.Task).filter(models.Task.status == models.TaskStatus.in_progress).count()
+    blocked_tasks = db.query(models.Task).filter(models.Task.status == models.TaskStatus.blocked).count()
+    review_tasks = db.query(models.Task).filter(models.Task.status == models.TaskStatus.review).count()
+    done_tasks = db.query(models.Task).filter(models.Task.status == models.TaskStatus.done).count()
 
-    p0_pending = db.query(models.Task).filter(
-        models.Task.status == models.TaskStatus.pending,
+    p0_incomplete = db.query(models.Task).filter(
+        models.Task.status != models.TaskStatus.done,
         models.Task.priority == models.TaskPriority.P0
     ).count()
 
     return {
         "total_projects": total_projects,
         "total_tasks": total_tasks,
-        "pending_tasks": pending_tasks,
-        "completed_tasks": completed_tasks,
-        "p0_pending": p0_pending,
-        "completion_rate": round((completed_tasks / total_tasks * 100) if total_tasks > 0 else 0, 1)
+        "backlog_tasks": backlog_tasks,
+        "todo_tasks": todo_tasks,
+        "in_progress_tasks": in_progress_tasks,
+        "blocked_tasks": blocked_tasks,
+        "review_tasks": review_tasks,
+        "done_tasks": done_tasks,
+        "p0_incomplete": p0_incomplete,
+        "completion_rate": round((done_tasks / total_tasks * 100) if total_tasks > 0 else 0, 1)
     }
+
+
+# ============== Task Events ==============
+
+@app.get("/api/tasks/{task_id}/events", response_model=schemas.TaskEventsList)
+def get_task_events(
+    task_id: int,
+    event_type: Optional[schemas.TaskEventType] = Query(None),
+    limit: int = Query(100, le=500),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db)
+):
+    """
+    Get event history for a specific task.
+
+    Query parameters:
+    - event_type: Filter by event type (optional)
+    - limit: Maximum number of events to return (default: 100, max: 500)
+    - offset: Number of events to skip for pagination (default: 0)
+    """
+    logger.debug(f"Getting events for task {task_id}: event_type={event_type}, limit={limit}, offset={offset}")
+
+    # Verify task exists
+    task = db.query(models.Task).filter(models.Task.id == task_id).first()
+    if not task:
+        logger.info(f"Task {task_id} not found")
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    # Build query
+    query = db.query(models.TaskEvent)\
+        .options(joinedload(models.TaskEvent.actor))\
+        .filter(models.TaskEvent.task_id == task_id)
+
+    # Apply event_type filter if provided
+    if event_type:
+        query = query.filter(models.TaskEvent.event_type == event_type)
+
+    # Get total count for pagination
+    total = query.count()
+
+    # Apply pagination and ordering
+    events = query.order_by(models.TaskEvent.created_at.desc())\
+        .limit(limit)\
+        .offset(offset)\
+        .all()
+
+    logger.info(f"Found {len(events)} events for task {task_id} (total: {total})")
+
+    return schemas.TaskEventsList(events=events, total=total)
+
+
+@app.get("/api/projects/{project_id}/events", response_model=schemas.TaskEventsList)
+def get_project_events(
+    project_id: int,
+    event_type: Optional[schemas.TaskEventType] = Query(None),
+    limit: int = Query(100, le=500),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db)
+):
+    """
+    Get event history for all tasks in a project.
+
+    Query parameters:
+    - event_type: Filter by event type (optional)
+    - limit: Maximum number of events to return (default: 100, max: 500)
+    - offset: Number of events to skip for pagination (default: 0)
+    """
+    logger.debug(f"Getting events for project {project_id}: event_type={event_type}, limit={limit}, offset={offset}")
+
+    # Verify project exists
+    project = db.query(models.Project).filter(models.Project.id == project_id).first()
+    if not project:
+        logger.info(f"Project {project_id} not found")
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Get all task IDs in the project
+    task_ids = db.query(models.Task.id).filter(models.Task.project_id == project_id).all()
+    task_id_list = [task_id[0] for task_id in task_ids]
+
+    if not task_id_list:
+        logger.info(f"No tasks found in project {project_id}")
+        return schemas.TaskEventsList(events=[], total=0)
+
+    # Build query
+    query = db.query(models.TaskEvent)\
+        .options(joinedload(models.TaskEvent.actor))\
+        .filter(models.TaskEvent.task_id.in_(task_id_list))
+
+    # Apply event_type filter if provided
+    if event_type:
+        query = query.filter(models.TaskEvent.event_type == event_type)
+
+    # Get total count for pagination
+    total = query.count()
+
+    # Apply pagination and ordering
+    events = query.order_by(models.TaskEvent.created_at.desc())\
+        .limit(limit)\
+        .offset(offset)\
+        .all()
+
+    logger.info(f"Found {len(events)} events for project {project_id} (total: {total})")
+
+    return schemas.TaskEventsList(events=events, total=total)
 
 
 # ============== Task Dependencies ==============
@@ -1012,8 +1263,8 @@ def get_task_dependencies(task_id: int, db: Session = Depends(get_db)):
 
     logger.debug(f"Found {len(blocked_tasks)} blocked task(s)")
 
-    # Calculate is_blocked: task is blocked if it has any blocking dependencies with status=pending
-    is_blocked = any(bt.status == models.TaskStatus.pending for bt in blocking_tasks)
+    # Calculate is_blocked: task is blocked if it has any blocking dependencies with status != done
+    is_blocked = any(bt.status != models.TaskStatus.done for bt in blocking_tasks)
     logger.info(f"Task {task_id} is_blocked={is_blocked}")
 
     # Convert to summary format with comment_count and is_blocked
@@ -1122,6 +1373,18 @@ def add_task_dependency(task_id: int, dependency: schemas.TaskDependencyCreate, 
     db.commit()
     db.refresh(db_dependency)
 
+    # Create dependency_added event on the blocked task
+    create_task_event(
+        db=db,
+        task_id=task_id,
+        event_type=models.TaskEventType.dependency_added,
+        actor_id=None,
+        metadata={
+            "blocking_task_id": dependency.blocking_task_id,
+            "blocking_task_title": blocking_task.title
+        }
+    )
+
     logger.critical(f"Successfully created dependency: task {dependency.blocking_task_id} blocks task {task_id}")
     return db_dependency
 
@@ -1143,8 +1406,23 @@ def remove_task_dependency(task_id: int, blocking_id: int, db: Session = Depends
         logger.info(f"Dependency not found: {blocking_id} -> {task_id}")
         raise HTTPException(status_code=404, detail="Dependency not found")
 
+    # Get blocking task title for event metadata
+    blocking_task = db.query(models.Task).filter(models.Task.id == blocking_id).first()
+
     db.delete(dependency)
     db.commit()
+
+    # Create dependency_removed event on the blocked task
+    create_task_event(
+        db=db,
+        task_id=task_id,
+        event_type=models.TaskEventType.dependency_removed,
+        actor_id=None,
+        metadata={
+            "blocking_task_id": blocking_id,
+            "blocking_task_title": blocking_task.title if blocking_task else None
+        }
+    )
 
     logger.critical(f"Successfully removed dependency: task {blocking_id} no longer blocks task {task_id}")
     return {"message": "Dependency removed"}

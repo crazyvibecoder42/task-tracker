@@ -41,13 +41,20 @@ mcp__task-tracker__take_ownership(task_id, author_id=1)
 
 2. **Take ownership** when you find a task to work on
 
-3. **Update task status** when complete:
-   - Tasks start as `pending`
-   - Mark as `completed` when done
-   - **Note:** Only two statuses are supported: `pending` and `completed`
+3. **Update task status** following the workflow:
+   - Tasks default to `todo` status when created
+   - **6-Status Workflow:** `backlog` → `todo` → `in_progress` → `review` → `done`
+   - Tasks can be marked as `blocked` (temporary state) when dependencies are incomplete
+   - Valid status values: `backlog`, `todo`, `in_progress`, `blocked`, `review`, `done`
 
-4. **Respect dependencies:**
-   - Tasks with `is_blocked: true` cannot be completed
+4. **Status Transition Best Practices:**
+   - Move task to `in_progress` when you start working on it
+   - Move to `review` when ready for review
+   - Move to `done` when fully completed (requires all subtasks to be done)
+   - Mark as `blocked` when waiting on dependencies
+
+5. **Respect dependencies:**
+   - Tasks with `is_blocked: true` cannot be marked as done
    - Complete blocking tasks first
    - Use actionable tasks endpoint to find unblocked work
 
@@ -67,20 +74,46 @@ mcp__task-tracker__take_ownership(task_id, author_id=1)
 - Parent-subtask deadlock prevention
 
 ### MCP Server Integration
-- 8 MCP tools for AI agent workflows
+- 10 MCP tools for AI agent workflows (added event retrieval tools)
 - Real-time task management
 - Dependency-aware task queries
+- Event timeline tracking with `get_task_events` and `get_project_events`
+
+### Event Tracking
+- Comprehensive audit trail for all task operations
+- Timeline feature showing task history with timestamps
+- **Event Types:**
+  - `task_created` - Task was created
+  - `status_change` - Task status was updated
+  - `field_update` - Other task fields were modified (title, description, priority, tag, etc.)
+  - `ownership_change` - Task ownership was assigned or reassigned
+  - `dependency_added` - Blocking dependency was added
+  - `dependency_removed` - Blocking dependency was removed
+  - `comment_added` - Comment was added to task
+- Event metadata includes actor information, old/new values, and contextual data
+- Events are queryable with filtering by event type and pagination support
 
 ## Database Schema
 
 ### Tasks Table
 - `parent_task_id`: References parent task for subtasks (nullable)
 - `is_blocked`: Computed field based on blocking dependencies
+- `status`: ENUM type with values: `backlog`, `todo`, `in_progress`, `blocked`, `review`, `done`
 
 ### Task Dependencies Table
 - `blocking_task_id`: Task that blocks another
 - `blocked_task_id`: Task being blocked
 - Unique constraint on (blocking_task_id, blocked_task_id)
+
+### Task Events Table
+- `task_id`: References task that the event belongs to
+- `event_type`: Type of event (task_created, status_change, field_update, etc.)
+- `actor_id`: User who triggered the event (nullable for system events)
+- `field_name`: Name of field that changed (for field_update and status_change events)
+- `old_value`: Previous value (nullable)
+- `new_value`: New value (nullable)
+- `event_metadata`: JSONB field for additional context
+- `created_at`: Timestamp of the event
 
 ## API Endpoints
 
@@ -88,19 +121,26 @@ mcp__task-tracker__take_ownership(task_id, author_id=1)
 - `GET /api/tasks/{id}/dependencies` - Get task with full dependency info
 - `POST /api/tasks/{id}/dependencies` - Add blocking relationship
 - `DELETE /api/tasks/{id}/dependencies/{blocking_id}` - Remove dependency
-- `GET /api/tasks/actionable` - Query unblocked pending tasks
+- `GET /api/tasks/actionable` - Query unblocked tasks (excludes backlog, blocked, and done)
 
 ### Subtasks
 - `GET /api/tasks/{id}/subtasks` - List subtasks
 - `GET /api/tasks/{id}/progress` - Get completion percentage
 - `POST /api/tasks` with `parent_task_id` - Create subtask
 
+### Task Events
+- `GET /api/tasks/{id}/events` - Get event history for a specific task
+  - Query params: `event_type` (filter), `limit` (max 500), `offset` (pagination)
+- `GET /api/projects/{id}/events` - Get event history for all tasks in a project
+  - Query params: `event_type` (filter), `limit` (max 500), `offset` (pagination)
+
 ## Business Rules
 
 ### Task Completion
-- Cannot complete task with pending subtasks
-- Cannot complete blocked task (has pending blocking dependencies)
-- Parent task requires all subtasks complete
+- Cannot mark task as `done` if it has subtasks that are not `done`
+- Cannot mark task as `done` if it is blocked by incomplete dependencies
+- Parent task requires all subtasks to be `done` before it can be marked `done`
+- Tasks in `backlog`, `blocked`, or `done` status are excluded from actionable tasks query
 
 ### Dependency Creation
 - No circular dependencies allowed

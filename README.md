@@ -5,7 +5,11 @@ A full-stack task tracking system with PostgreSQL, FastAPI backend, Next.js fron
 ## Features
 
 - **Projects**: Create and manage projects
-- **Tasks**: Track tasks with tags (bug, feature, idea), priorities (P0, P1), and status (pending, completed)
+- **Tasks**: Track tasks with tags (bug, feature, idea), priorities (P0, P1), and 6-status workflow system
+- **6-Status Workflow**: Tasks progress through `backlog` → `todo` → `in_progress` → `review` → `done`, with `blocked` as a temporary state
+- **Event Tracking**: Comprehensive audit trail and timeline for all task operations
+- **Task Dependencies**: Create blocking relationships between tasks with circular dependency detection
+- **Hierarchical Subtasks**: Break down tasks into subtasks with automatic progress tracking
 - **Comments**: Add comments to tasks with author attribution
 - **Authors**: Manage team members/authors
 - **Dashboard**: Overview with statistics and completion rate
@@ -82,12 +86,21 @@ The MCP server allows programmatic access to the task tracker through Claude Des
 - `delete_project` - Delete a project
 
 **Task Management:**
-- `list_tasks` - List tasks with optional filters (project_id, status, priority, tag)
+- `list_tasks` - List tasks with optional filters (project_id, status, priority, tag, owner_id)
 - `create_task` - Create a new task
 - `get_task` - Get task details with comments
 - `update_task` - Update a task
-- `complete_task` - Mark task as completed
+- `complete_task` - Mark task as completed (sets status to `done`)
+- `take_ownership` - Assign task ownership to an author
 - `delete_task` - Delete a task
+- `get_actionable_tasks` - Get unblocked tasks ready for work (excludes backlog, blocked, done)
+- `get_task_dependencies` - Get task with full dependency information
+- `add_task_dependency` - Add a blocking dependency between tasks
+- `remove_task_dependency` - Remove a blocking dependency
+- `get_task_subtasks` - Get all subtasks of a task
+- `get_task_progress` - Get completion percentage based on subtasks
+- `get_task_events` - Get event history for a specific task
+- `get_project_events` - Get event history for all tasks in a project
 
 **Comment Management:**
 - `list_comments` - List comments for a task
@@ -157,11 +170,28 @@ Task
 ├── description
 ├── tag (bug | feature | idea)
 ├── priority (P0 | P1)
-├── status (pending | completed)
+├── status (backlog | todo | in_progress | blocked | review | done)
 ├── project_id → Project
 ├── author_id → Author
+├── owner_id → Author
+├── parent_task_id → Task (for subtasks)
 ├── created_at
 └── updated_at
+
+TaskEvent
+├── id
+├── task_id → Task
+├── event_type (task_created | status_change | field_update | ownership_change | dependency_added | dependency_removed | comment_added)
+├── actor_id → Author
+├── field_name
+├── old_value
+├── new_value
+├── event_metadata (JSONB)
+└── created_at
+
+TaskDependency
+├── blocking_task_id → Task
+└── blocked_task_id → Task
 
 Comment
 ├── id

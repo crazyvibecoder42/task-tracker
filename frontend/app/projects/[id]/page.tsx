@@ -7,14 +7,13 @@ import {
   AlertCircle,
   ArrowLeft,
   Bug,
-  CheckCircle2,
-  Circle,
   Lightbulb,
   MessageSquare,
   Plus,
   Sparkles,
   Trash2
 } from 'lucide-react';
+import { STATUS_CONFIG, TaskStatus } from '@/components/StatusConfig';
 import {
   getProject,
   getProjectStats,
@@ -39,7 +38,7 @@ export default function ProjectDetail() {
   const [authors, setAuthors] = useState<Author[]>([]);
   const [loading, setLoading] = useState(true);
   const [showNewTask, setShowNewTask] = useState(false);
-  const [filter, setFilter] = useState<'all' | 'pending' | 'completed'>('all');
+  const [filter, setFilter] = useState<'all' | TaskStatus>('all');
 
   // New task form
   const [newTitle, setNewTitle] = useState('');
@@ -93,11 +92,9 @@ export default function ProjectDetail() {
     }
   };
 
-  const handleToggleStatus = async (task: Task) => {
+  const handleStatusChange = async (taskId: number, newStatus: TaskStatus) => {
     try {
-      await updateTask(task.id, {
-        status: task.status === 'pending' ? 'completed' : 'pending'
-      });
+      await updateTask(taskId, { status: newStatus });
       loadProject();
     } catch (error) {
       console.error('Failed to update task:', error);
@@ -198,22 +195,34 @@ export default function ProjectDetail() {
 
       {/* Stats */}
       {stats && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4 mb-8">
           <div className="bg-white p-4 rounded-lg border border-gray-200">
-            <p className="text-sm text-gray-500">Total Tasks</p>
+            <p className="text-sm text-gray-500">Total</p>
             <p className="text-xl font-bold">{stats.total_tasks}</p>
           </div>
           <div className="bg-white p-4 rounded-lg border border-gray-200">
-            <p className="text-sm text-gray-500">Pending</p>
-            <p className="text-xl font-bold text-yellow-600">{stats.pending_tasks}</p>
+            <p className="text-sm text-gray-500">Backlog</p>
+            <p className="text-xl font-bold text-gray-600">{stats.backlog_tasks}</p>
           </div>
           <div className="bg-white p-4 rounded-lg border border-gray-200">
-            <p className="text-sm text-gray-500">Completed</p>
-            <p className="text-xl font-bold text-green-600">{stats.completed_tasks}</p>
+            <p className="text-sm text-gray-500">To Do</p>
+            <p className="text-xl font-bold text-blue-600">{stats.todo_tasks}</p>
           </div>
           <div className="bg-white p-4 rounded-lg border border-gray-200">
-            <p className="text-sm text-gray-500">P0 Tasks</p>
-            <p className="text-xl font-bold text-red-600">{stats.p0_tasks}</p>
+            <p className="text-sm text-gray-500">In Progress</p>
+            <p className="text-xl font-bold text-yellow-600">{stats.in_progress_tasks}</p>
+          </div>
+          <div className="bg-white p-4 rounded-lg border border-gray-200">
+            <p className="text-sm text-gray-500">Blocked</p>
+            <p className="text-xl font-bold text-red-600">{stats.blocked_tasks}</p>
+          </div>
+          <div className="bg-white p-4 rounded-lg border border-gray-200">
+            <p className="text-sm text-gray-500">Review</p>
+            <p className="text-xl font-bold text-purple-600">{stats.review_tasks}</p>
+          </div>
+          <div className="bg-white p-4 rounded-lg border border-gray-200">
+            <p className="text-sm text-gray-500">Done</p>
+            <p className="text-xl font-bold text-green-600">{stats.done_tasks}</p>
           </div>
         </div>
       )}
@@ -223,18 +232,28 @@ export default function ProjectDetail() {
         <div className="p-4 border-b border-gray-200 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <h2 className="text-lg font-semibold">Tasks</h2>
-            <div className="flex gap-1">
-              {['all', 'pending', 'completed'].map((f) => (
+            <div className="flex gap-1 flex-wrap">
+              <button
+                onClick={() => setFilter('all')}
+                className={`px-3 py-1 text-sm rounded-lg ${
+                  filter === 'all'
+                    ? 'bg-indigo-100 text-indigo-700'
+                    : 'text-gray-600 hover:bg-gray-100'
+                }`}
+              >
+                All
+              </button>
+              {(Object.keys(STATUS_CONFIG) as TaskStatus[]).map((status) => (
                 <button
-                  key={f}
-                  onClick={() => setFilter(f as any)}
+                  key={status}
+                  onClick={() => setFilter(status)}
                   className={`px-3 py-1 text-sm rounded-lg ${
-                    filter === f
+                    filter === status
                       ? 'bg-indigo-100 text-indigo-700'
                       : 'text-gray-600 hover:bg-gray-100'
                   }`}
                 >
-                  {f.charAt(0).toUpperCase() + f.slice(1)}
+                  {STATUS_CONFIG[status].label}
                 </button>
               ))}
             </div>
@@ -330,25 +349,13 @@ export default function ProjectDetail() {
                 key={task.id}
                 className="p-4 flex items-start gap-4 hover:bg-gray-50 transition-colors"
               >
-                <button
-                  onClick={() => handleToggleStatus(task)}
-                  className={`mt-1 flex-shrink-0 ${
-                    task.status === 'completed' ? 'text-green-600' : 'text-gray-400'
-                  }`}
-                >
-                  {task.status === 'completed' ? (
-                    <CheckCircle2 className="w-5 h-5" />
-                  ) : (
-                    <Circle className="w-5 h-5" />
-                  )}
-                </button>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-3 mb-1">
                     <span className="font-mono text-sm text-gray-500">#{task.id}</span>
                     <Link
                       href={`/tasks/${task.id}`}
                       className={`font-medium hover:text-indigo-600 ${
-                        task.status === 'completed' ? 'line-through text-gray-500' : 'text-gray-900'
+                        task.status === 'done' ? 'line-through text-gray-500' : 'text-gray-900'
                       }`}
                     >
                       {task.title}
@@ -368,6 +375,16 @@ export default function ProjectDetail() {
                     <p className="text-sm text-gray-500 mt-1 line-clamp-2">{task.description}</p>
                   )}
                   <div className="flex items-center gap-2 mt-2">
+                    {(() => {
+                      const StatusIcon = STATUS_CONFIG[task.status].icon;
+                      return (
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full border ${STATUS_CONFIG[task.status].color}`}>
+                          <StatusIcon className="w-3 h-3" />
+                          {STATUS_CONFIG[task.status].label}
+                        </span>
+                      );
+                    })()}
+                    <span className="text-gray-300">•</span>
                     <span
                       className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full ${
                         task.tag === 'bug'

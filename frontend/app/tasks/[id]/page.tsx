@@ -7,8 +7,6 @@ import {
   AlertCircle,
   ArrowLeft,
   Bug,
-  CheckCircle2,
-  Circle,
   Clock,
   GitBranch,
   Info,
@@ -19,7 +17,8 @@ import {
   Sparkles,
   Trash2,
   User,
-  X
+  X,
+  History
 } from 'lucide-react';
 import {
   getTask,
@@ -39,6 +38,8 @@ import {
   Author,
   TaskProgress
 } from '@/lib/api';
+import { STATUS_CONFIG, TaskStatus } from '@/components/StatusConfig';
+import Timeline from '@/components/Timeline';
 
 export default function TaskDetail() {
   const params = useParams();
@@ -77,7 +78,7 @@ export default function TaskDetail() {
   const [editDescription, setEditDescription] = useState('');
   const [editTag, setEditTag] = useState<'bug' | 'feature' | 'idea'>('feature');
   const [editPriority, setEditPriority] = useState<'P0' | 'P1'>('P1');
-  const [editStatus, setEditStatus] = useState<'pending' | 'completed'>('pending');
+  const [editStatus, setEditStatus] = useState<TaskStatus>('todo');
 
   useEffect(() => {
     loadTask();
@@ -163,13 +164,12 @@ export default function TaskDetail() {
     }
   };
 
-  const handleToggleStatus = async () => {
+  const handleStatusChange = async (newStatus: TaskStatus) => {
     if (!task) return;
     try {
-      await updateTask(taskId, {
-        status: task.status === 'pending' ? 'completed' : 'pending'
-      });
+      await updateTask(taskId, { status: newStatus });
       loadTask();
+      loadSubtasks();
     } catch (error) {
       console.error('Failed to update task:', error);
     }
@@ -248,11 +248,10 @@ export default function TaskDetail() {
     }
   };
 
-  const handleToggleSubtaskStatus = async (subtaskId: number, currentStatus: string) => {
+  const handleToggleSubtaskStatus = async (subtaskId: number, currentStatus: TaskStatus) => {
     try {
-      await updateTask(subtaskId, {
-        status: currentStatus === 'pending' ? 'completed' : 'pending'
-      });
+      const nextStatus = currentStatus === 'done' ? 'todo' : 'done';
+      await updateTask(subtaskId, { status: nextStatus });
       loadSubtasks();
     } catch (error) {
       console.error('Failed to toggle subtask status:', error);
@@ -382,11 +381,15 @@ export default function TaskDetail() {
                 </select>
                 <select
                   value={editStatus}
-                  onChange={(e) => setEditStatus(e.target.value as any)}
+                  onChange={(e) => setEditStatus(e.target.value as TaskStatus)}
                   className="px-4 py-2 border border-gray-300 rounded-lg"
                 >
-                  <option value="pending">Pending</option>
-                  <option value="completed">Completed</option>
+                  <option value="backlog">Backlog</option>
+                  <option value="todo">To Do</option>
+                  <option value="in_progress">In Progress</option>
+                  <option value="blocked">Blocked</option>
+                  <option value="review">Review</option>
+                  <option value="done">Done</option>
                 </select>
               </div>
               <div className="flex gap-2">
@@ -409,18 +412,6 @@ export default function TaskDetail() {
             <>
               <div className="flex items-start justify-between">
                 <div className="flex items-start gap-4">
-                  <button
-                    onClick={handleToggleStatus}
-                    className={`mt-1 ${
-                      task.status === 'completed' ? 'text-green-600' : 'text-gray-400'
-                    }`}
-                  >
-                    {task.status === 'completed' ? (
-                      <CheckCircle2 className="w-6 h-6" />
-                    ) : (
-                      <Circle className="w-6 h-6" />
-                    )}
-                  </button>
                   <div>
                     <div className="mb-2">
                       <span className="text-sm font-mono text-gray-500">#{task.id}</span>
@@ -428,7 +419,7 @@ export default function TaskDetail() {
                     <div className="flex items-center gap-3">
                       <h1
                         className={`text-2xl font-bold ${
-                          task.status === 'completed'
+                          task.status === 'done'
                             ? 'line-through text-gray-500'
                             : 'text-gray-900'
                         }`}
@@ -462,21 +453,38 @@ export default function TaskDetail() {
                       </div>
                     )}
 
-                    {/* Owner Dropdown */}
-                    <div className="mt-3 flex items-center gap-2">
-                      <span className="text-sm text-gray-600">Owner:</span>
-                      <select
-                        value={selectedOwnerId || ''}
-                        onChange={(e) => handleOwnerChange(e.target.value ? Number(e.target.value) : null)}
-                        className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm bg-white hover:border-indigo-400 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                      >
-                        <option value="">Unassigned</option>
-                        {authors.map((author) => (
-                          <option key={author.id} value={author.id}>
-                            {author.name}
-                          </option>
-                        ))}
-                      </select>
+                    {/* Status and Owner Controls */}
+                    <div className="mt-3 flex items-center gap-4">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm text-gray-600">Status:</span>
+                        <select
+                          value={task.status}
+                          onChange={(e) => handleStatusChange(e.target.value as TaskStatus)}
+                          className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm bg-white hover:border-indigo-400 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                        >
+                          <option value="backlog">Backlog</option>
+                          <option value="todo">To Do</option>
+                          <option value="in_progress">In Progress</option>
+                          <option value="blocked">Blocked</option>
+                          <option value="review">Review</option>
+                          <option value="done">Done</option>
+                        </select>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm text-gray-600">Owner:</span>
+                        <select
+                          value={selectedOwnerId || ''}
+                          onChange={(e) => handleOwnerChange(e.target.value ? Number(e.target.value) : null)}
+                          className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm bg-white hover:border-indigo-400 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                        >
+                          <option value="">Unassigned</option>
+                          {authors.map((author) => (
+                            <option key={author.id} value={author.id}>
+                              {author.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
                     </div>
 
                     <div className="flex items-center gap-3 mt-3">
@@ -501,15 +509,15 @@ export default function TaskDetail() {
                       >
                         {task.priority}
                       </span>
-                      <span
-                        className={`px-3 py-1 text-sm rounded-full ${
-                          task.status === 'completed'
-                            ? 'bg-green-100 text-green-700'
-                            : 'bg-yellow-100 text-yellow-700'
-                        }`}
-                      >
-                        {task.status}
-                      </span>
+                      {(() => {
+                        const StatusIcon = STATUS_CONFIG[task.status].icon;
+                        return (
+                          <span className={`inline-flex items-center gap-1.5 px-3 py-1 text-sm rounded-full border ${STATUS_CONFIG[task.status].color}`}>
+                            <StatusIcon className="w-4 h-4" />
+                            {STATUS_CONFIG[task.status].label}
+                          </span>
+                        );
+                      })()}
                       {task.is_blocked && (
                         <span className="inline-flex items-center gap-1 px-3 py-1 text-sm rounded-full bg-red-100 text-red-700 border border-red-300">
                           <AlertCircle className="w-4 h-4" />
@@ -807,34 +815,30 @@ export default function TaskDetail() {
             <p className="text-gray-500 text-center py-8">No subtasks yet</p>
           ) : (
             <div className="space-y-2">
-              {subtasks.map((subtask) => (
-                <div
-                  key={subtask.id}
-                  className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors group"
-                >
-                  <button
-                    onClick={() => handleToggleSubtaskStatus(subtask.id, subtask.status)}
-                    className={`flex-shrink-0 ${
-                      subtask.status === 'completed' ? 'text-green-600' : 'text-gray-400'
-                    }`}
+              {subtasks.map((subtask) => {
+                const SubtaskStatusIcon = STATUS_CONFIG[subtask.status].icon;
+                return (
+                  <div
+                    key={subtask.id}
+                    className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors group"
                   >
-                    {subtask.status === 'completed' ? (
-                      <CheckCircle2 className="w-5 h-5" />
-                    ) : (
-                      <Circle className="w-5 h-5" />
-                    )}
-                  </button>
-                  <Link
-                    href={`/tasks/${subtask.id}`}
-                    className={`flex-1 hover:text-indigo-600 ${
-                      subtask.status === 'completed'
-                        ? 'line-through text-gray-500'
-                        : 'text-gray-900'
-                    }`}
-                  >
-                    <span className="text-sm font-mono text-gray-400 mr-2">#{subtask.id}</span>
-                    {subtask.title}
-                  </Link>
+                    <button
+                      onClick={() => handleToggleSubtaskStatus(subtask.id, subtask.status)}
+                      className="flex-shrink-0"
+                    >
+                      <SubtaskStatusIcon className={`w-5 h-5 ${subtask.status === 'done' ? 'text-green-600' : 'text-gray-400'}`} />
+                    </button>
+                    <Link
+                      href={`/tasks/${subtask.id}`}
+                      className={`flex-1 hover:text-indigo-600 ${
+                        subtask.status === 'done'
+                          ? 'line-through text-gray-500'
+                          : 'text-gray-900'
+                      }`}
+                    >
+                      <span className="text-sm font-mono text-gray-400 mr-2">#{subtask.id}</span>
+                      {subtask.title}
+                    </Link>
                   <span
                     className={`px-2 py-1 text-xs rounded-full font-medium ${
                       subtask.priority === 'P0'
@@ -857,13 +861,14 @@ export default function TaskDetail() {
                     {subtask.tag}
                   </span>
                 </div>
-              ))}
+              );
+              })}
             </div>
           )}
         </div>
 
         {/* Comments Section */}
-        <div className="p-6">
+        <div className="p-6 border-b border-gray-200">
           <h2 className="text-lg font-semibold flex items-center gap-2 mb-4">
             <MessageSquare className="w-5 h-5" />
             Comments ({task.comments?.length || 0})
@@ -939,6 +944,15 @@ export default function TaskDetail() {
               ))
             )}
           </div>
+        </div>
+
+        {/* Timeline Section */}
+        <div className="p-6">
+          <h2 className="text-lg font-semibold flex items-center gap-2 mb-4">
+            <History className="w-5 h-5" />
+            Activity Timeline
+          </h2>
+          <Timeline taskId={taskId} limit={50} showFilters={true} />
         </div>
       </div>
     </div>
