@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import Link from 'next/link';
-import { AlertCircle, Bug, Filter, Lightbulb, MessageSquare, Sparkles } from 'lucide-react';
+import { AlertCircle, Bug, Filter, Lightbulb, MessageSquare, Search, Sparkles } from 'lucide-react';
 import { getTasks, updateTask, Task } from '@/lib/api';
 import { STATUS_CONFIG, TaskStatus } from '@/components/StatusConfig';
 
@@ -12,23 +12,38 @@ export default function TasksPage() {
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [priorityFilter, setPriorityFilter] = useState<string>('');
   const [tagFilter, setTagFilter] = useState<string>('');
+  const [searchQuery, setSearchQuery] = useState<string>('');
+
+  // Track request ID to prevent race conditions
+  const requestIdRef = useRef(0);
 
   useEffect(() => {
     loadTasks();
-  }, [statusFilter, priorityFilter, tagFilter]);
+  }, [statusFilter, priorityFilter, tagFilter, searchQuery]);
 
   const loadTasks = async () => {
+    // Increment request ID for this load
+    const currentRequestId = ++requestIdRef.current;
+
     try {
       const data = await getTasks({
+        q: searchQuery || undefined,
         status: statusFilter || undefined,
         priority: priorityFilter || undefined,
         tag: tagFilter || undefined
       });
-      setTasks(data);
+
+      // Only update if this is still the latest request
+      if (currentRequestId === requestIdRef.current) {
+        setTasks(data);
+      }
     } catch (error) {
       console.error('Failed to load tasks:', error);
     } finally {
-      setLoading(false);
+      // Only update loading state if this is still the latest request
+      if (currentRequestId === requestIdRef.current) {
+        setLoading(false);
+      }
     }
   };
 
@@ -58,9 +73,10 @@ export default function TasksPage() {
     setStatusFilter('');
     setPriorityFilter('');
     setTagFilter('');
+    setSearchQuery('');
   };
 
-  const hasFilters = statusFilter || priorityFilter || tagFilter;
+  const hasFilters = statusFilter || priorityFilter || tagFilter || searchQuery;
 
   if (loading) {
     return (
@@ -83,6 +99,19 @@ export default function TasksPage() {
           <div className="flex items-center gap-2 text-gray-600">
             <Filter className="w-4 h-4" />
             <span className="text-sm font-medium">Filters:</span>
+          </div>
+          {/* Search Input */}
+          <div className="relative flex-1 max-w-md">
+            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+              <Search className="h-4 w-4 text-gray-400" />
+            </div>
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search tasks..."
+              className="w-full pl-9 pr-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+            />
           </div>
           <select
             value={statusFilter}

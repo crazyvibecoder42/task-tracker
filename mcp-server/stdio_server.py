@@ -97,6 +97,8 @@ async def list_tools() -> list[Tool]:
                  "priority": {"type": "string", "enum": ["P0", "P1"], "description": "Filter by priority"},
                  "tag": {"type": "string", "enum": ["bug", "feature", "idea"], "description": "Filter by tag"},
                  "owner_id": {"type": "integer", "description": "Filter by owner ID (use 0 for unassigned tasks)"},
+                 "q": {"type": "string", "description": "Text search query (searches title and description)"},
+                 "sort_by": {"type": "string", "description": "Multi-field sorting (e.g., '-priority,created_at' for priority desc, created_at asc)"},
                  "limit": {"type": "integer", "description": "Optional: Max tasks to return (no default, max: 500). Omit to get all tasks."},
                  "offset": {"type": "integer", "description": "Pagination offset (default: 0)"}
              }, "required": ["project_id"]}),
@@ -109,6 +111,17 @@ async def list_tools() -> list[Tool]:
                  "limit": {"type": "integer", "description": "Optional: Max tasks to return (no default, max: 500). Omit to get all tasks."},
                  "offset": {"type": "integer", "description": "Pagination offset (default: 0)"}
              }, "required": ["project_id"]}),
+        Tool(name="search", description="Global search across tasks, projects, and comments with optional filters",
+             inputSchema={"type": "object", "properties": {
+                 "q": {"type": "string", "description": "Search query (minimum 2 characters)"},
+                 "project_id": {"type": "integer", "description": "Filter results to a specific project (optional)"},
+                 "search_in": {"type": "array", "items": {"type": "string", "enum": ["tasks", "projects", "comments"]}, "description": "Limit search to specific entity types (optional, defaults to all)"},
+                 "status": {"type": "string", "enum": ["backlog", "todo", "in_progress", "blocked", "review", "done"], "description": "Filter tasks by status (optional)"},
+                 "priority": {"type": "string", "enum": ["P0", "P1"], "description": "Filter tasks by priority (optional)"},
+                 "tag": {"type": "string", "enum": ["bug", "feature", "idea"], "description": "Filter tasks by tag (optional)"},
+                 "owner_id": {"type": "integer", "description": "Filter tasks by owner ID (optional, use 0 for unassigned tasks)"},
+                 "limit": {"type": "integer", "description": "Max results per entity type (optional, default: 10, max: 100)"}
+             }, "required": ["q"]}),
         Tool(name="create_task", description="Create a new task in a project",
              inputSchema={"type": "object", "properties": {
                  "project_id": {"type": "integer", "description": "Project ID"},
@@ -281,7 +294,7 @@ Example: list_tasks(project_id=4, status='todo', limit=10)"""
             }
         else:
             params = {}
-            for k in ["project_id", "status", "priority", "tag", "offset"]:
+            for k in ["project_id", "status", "priority", "tag", "offset", "q", "sort_by"]:
                 if k in arguments: params[k] = arguments[k]
 
             # Only pass limit if explicitly provided (matches backend opt-in behavior)
@@ -318,6 +331,23 @@ Example: list_actionable_tasks(project_id=4, priority='P0', limit=10)"""
                 # Special handling: 0 means filter for NULL owner_id
                 params["owner_id"] = None if arguments["owner_id"] == 0 else arguments["owner_id"]
             result = await api_request("GET", "/api/tasks/actionable", params)
+    elif name == "search":
+        params = {"q": arguments["q"]}
+
+        # Add optional filters
+        for k in ["project_id", "status", "priority", "tag", "limit"]:
+            if k in arguments:
+                params[k] = arguments[k]
+
+        # Handle search_in array - convert to comma-separated string
+        if "search_in" in arguments and arguments["search_in"]:
+            params["search_in"] = ",".join(arguments["search_in"])
+
+        # Handle owner_id with special 0 => None conversion
+        if "owner_id" in arguments:
+            params["owner_id"] = None if arguments["owner_id"] == 0 else arguments["owner_id"]
+
+        result = await api_request("GET", "/api/search", params)
     elif name == "create_task":
         data = {"project_id": arguments["project_id"], "title": arguments["title"]}
         for k in ["description", "tag", "priority", "author_id", "owner_id"]:

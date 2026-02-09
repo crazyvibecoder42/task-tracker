@@ -1,8 +1,9 @@
 from fastapi import FastAPI, HTTPException, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import func, or_
-from typing import List, Optional
+from sqlalchemy import func, or_, desc, asc, text
+from sqlalchemy.sql import func as sql_func
+from typing import List, Optional, Literal
 from collections import deque
 import logging
 
@@ -498,16 +499,22 @@ def list_tasks(
     priority: Optional[schemas.TaskPriority] = Query(None),
     tag: Optional[schemas.TaskTag] = Query(None),
     owner_id: Optional[int] = Query(None),
+    q: Optional[str] = Query(None, description="Full-text search query"),
+    sort_by: Optional[str] = Query(None, description="Sort field(s): created_at, updated_at, priority, status, rank (comma-separated, prefix with - for desc)"),
     limit: Optional[int] = Query(None, le=500, description="Optional limit for pagination (max 500)"),
     offset: int = Query(0, ge=0, description="Offset for pagination (only used with limit)"),
     db: Session = Depends(get_db)
 ):
+    logger.debug(f"list_tasks called with q={q}, sort_by={sort_by}, filters: project={project_id}, status={status}, priority={priority}, tag={tag}, owner={owner_id}")
+
+    # Base query with eager loading
     query = db.query(models.Task).options(
         joinedload(models.Task.author),
         joinedload(models.Task.owner),
         joinedload(models.Task.comments)
     )
 
+    # Apply filters
     if project_id:
         query = query.filter(models.Task.project_id == project_id)
     if status:
@@ -519,14 +526,76 @@ def list_tasks(
     if owner_id is not None:
         query = query.filter(models.Task.owner_id == owner_id)
 
-    # Add deterministic ordering for reliable pagination
-    query = query.order_by(models.Task.id)
+    # Full-text search if query provided
+    if q:
+        # Validate query is not empty or whitespace only
+        if not q.strip():
+            logger.info("Empty or whitespace-only search query provided")
+            raise HTTPException(status_code=400, detail="Search query cannot be empty or whitespace only")
+
+        logger.debug(f"Applying full-text search with query: {q}")
+        # Use plainto_tsquery for natural language queries (handles special characters automatically)
+        search_query = func.plainto_tsquery('english', q)
+        query = query.filter(models.Task.search_vector.op('@@')(search_query))
+        logger.info(f"Full-text search applied for query: {q}")
+
+    # Apply sorting
+    if sort_by:
+        logger.debug(f"Applying custom sort: {sort_by}")
+        order_clauses = []
+        for field in sort_by.split(','):
+            field = field.strip()
+            if field.startswith('-'):
+                # Descending order
+                field_name = field[1:]
+                if field_name == 'rank' and q:
+                    # Relevance ranking only available when searching
+                    search_query = func.plainto_tsquery('english', q)
+                    order_clauses.append(desc(func.ts_rank(models.Task.search_vector, search_query)))
+                elif field_name == 'created_at':
+                    order_clauses.append(desc(models.Task.created_at))
+                elif field_name == 'updated_at':
+                    order_clauses.append(desc(models.Task.updated_at))
+                elif field_name == 'priority':
+                    order_clauses.append(desc(models.Task.priority))
+                elif field_name == 'status':
+                    order_clauses.append(desc(models.Task.status))
+            else:
+                # Ascending order
+                if field == 'rank' and q:
+                    search_query = func.plainto_tsquery('english', q)
+                    order_clauses.append(asc(func.ts_rank(models.Task.search_vector, search_query)))
+                elif field == 'created_at':
+                    order_clauses.append(asc(models.Task.created_at))
+                elif field == 'updated_at':
+                    order_clauses.append(asc(models.Task.updated_at))
+                elif field == 'priority':
+                    order_clauses.append(asc(models.Task.priority))
+                elif field == 'status':
+                    order_clauses.append(asc(models.Task.status))
+
+        if order_clauses:
+            # Add task.id as tiebreaker for deterministic pagination
+            order_clauses.append(asc(models.Task.id))
+            query = query.order_by(*order_clauses)
+        else:
+            # Fallback to default ordering
+            query = query.order_by(models.Task.id)
+    elif q:
+        # If searching but no sort specified, sort by relevance (rank) descending
+        logger.debug("Sorting by relevance (rank desc) for search query")
+        search_query = func.plainto_tsquery('english', q)
+        query = query.order_by(desc(func.ts_rank(models.Task.search_vector, search_query)), models.Task.id)
+    else:
+        # Default deterministic ordering for reliable pagination
+        query = query.order_by(models.Task.id)
 
     # Apply pagination only if limit is explicitly provided (opt-in)
     if limit is not None:
         query = query.offset(offset).limit(limit)
 
     tasks = query.all()
+    logger.debug(f"Retrieved {len(tasks)} tasks")
 
     # Bulk calculate is_blocked for all tasks to avoid N+1 queries
     task_ids = [task.id for task in tasks]
@@ -555,6 +624,7 @@ def list_tasks(
         }
         result.append(task_dict)
 
+    logger.info(f"list_tasks completed successfully: returned {len(result)} tasks")
     return result
 
 
@@ -1133,6 +1203,193 @@ def get_overall_stats(db: Session = Depends(get_db)):
         "p0_incomplete": p0_incomplete,
         "completion_rate": round((done_tasks / total_tasks * 100) if total_tasks > 0 else 0, 1)
     }
+
+
+# ============== Full-Text Search ==============
+
+@app.get("/api/search", response_model=schemas.SearchResults)
+def global_search(
+    q: str = Query(..., description="Search query (required)"),
+    project_id: Optional[int] = Query(None, description="Filter to specific project"),
+    search_in: Optional[str] = Query(None, description="Comma-separated entity types (tasks,projects,comments)"),
+    status: Optional[schemas.TaskStatus] = Query(None, description="Filter tasks by status"),
+    priority: Optional[schemas.TaskPriority] = Query(None, description="Filter tasks by priority"),
+    tag: Optional[schemas.TaskTag] = Query(None, description="Filter tasks by tag"),
+    owner_id: Optional[int] = Query(None, description="Filter tasks by owner (use 0 for unassigned)"),
+    limit: int = Query(10, le=100, description="Maximum results per category (max 100)"),
+    db: Session = Depends(get_db)
+):
+    """
+    Perform full-text search across tasks, projects, and comments.
+    Returns relevance-ranked results from all entities.
+    Supports filtering by project, status, priority, tag, and owner.
+    """
+    logger.debug(f"global_search called with query: {q}, project_id: {project_id}, search_in: {search_in}, "
+                 f"status: {status}, priority: {priority}, tag: {tag}, owner_id: {owner_id}, limit: {limit}")
+
+    if not q or not q.strip():
+        logger.info("Empty search query provided")
+        raise HTTPException(status_code=400, detail="Search query cannot be empty")
+
+    # Parse search_in parameter to determine which entities to search
+    entities_to_search = {"tasks", "projects", "comments"}  # Default: search all
+    if search_in:
+        entities_to_search = {e.strip() for e in search_in.split(',') if e.strip()}
+        valid_entities = {"tasks", "projects", "comments"}
+        if not entities_to_search.issubset(valid_entities):
+            raise HTTPException(status_code=400, detail=f"Invalid search_in values. Must be comma-separated list from: {valid_entities}")
+
+    # Use plainto_tsquery for natural language queries
+    search_query = func.plainto_tsquery('english', q)
+
+    # Search tasks (if requested)
+    tasks = []
+    if "tasks" in entities_to_search:
+        logger.debug("Searching tasks...")
+        task_query = db.query(
+            models.Task.id,
+            models.Task.title,
+            models.Task.description,
+            models.Task.tag,
+            models.Task.priority,
+            models.Task.status,
+            models.Task.project_id,
+            models.Task.parent_task_id,
+            models.Task.created_at,
+            models.Task.updated_at,
+            func.ts_rank(models.Task.search_vector, search_query).label('rank')
+        ).filter(
+            models.Task.search_vector.op('@@')(search_query)
+        )
+
+        # Apply task filters
+        if project_id is not None:
+            task_query = task_query.filter(models.Task.project_id == project_id)
+        if status is not None:
+            task_query = task_query.filter(models.Task.status == status)
+        if priority is not None:
+            task_query = task_query.filter(models.Task.priority == priority)
+        if tag is not None:
+            task_query = task_query.filter(models.Task.tag == tag)
+        if owner_id is not None:
+            if owner_id == 0:
+                task_query = task_query.filter(models.Task.owner_id.is_(None))
+            else:
+                task_query = task_query.filter(models.Task.owner_id == owner_id)
+
+        task_query = task_query.order_by(
+            desc(func.ts_rank(models.Task.search_vector, search_query))
+        ).limit(limit)
+
+        task_results = task_query.all()
+
+        tasks = [
+            schemas.SearchResultTask(
+                id=row.id,
+                title=row.title,
+                description=row.description,
+                tag=row.tag,
+                priority=row.priority,
+                status=row.status,
+                project_id=row.project_id,
+                parent_task_id=row.parent_task_id,
+                rank=row.rank,
+                created_at=row.created_at,
+                updated_at=row.updated_at
+            )
+            for row in task_results
+        ]
+        logger.debug(f"Found {len(tasks)} matching tasks")
+
+    # Search projects (if requested)
+    projects = []
+    if "projects" in entities_to_search:
+        logger.debug("Searching projects...")
+        project_query = db.query(
+            models.Project.id,
+            models.Project.name,
+            models.Project.description,
+            models.Project.created_at,
+            models.Project.updated_at,
+            func.ts_rank(models.Project.search_vector, search_query).label('rank')
+        ).filter(
+            models.Project.search_vector.op('@@')(search_query)
+        )
+
+        # Apply project filter if specified
+        if project_id is not None:
+            project_query = project_query.filter(models.Project.id == project_id)
+
+        project_query = project_query.order_by(
+            desc(func.ts_rank(models.Project.search_vector, search_query))
+        ).limit(limit)
+
+        project_results = project_query.all()
+
+        projects = [
+            schemas.SearchResultProject(
+                id=row.id,
+                name=row.name,
+                description=row.description,
+                rank=row.rank,
+                created_at=row.created_at,
+                updated_at=row.updated_at
+            )
+            for row in project_results
+        ]
+        logger.debug(f"Found {len(projects)} matching projects")
+
+    # Search comments (if requested, with task title for context)
+    comments = []
+    if "comments" in entities_to_search:
+        logger.debug("Searching comments...")
+        comment_query = db.query(
+            models.Comment.id,
+            models.Comment.content,
+            models.Comment.task_id,
+            models.Task.title.label('task_title'),
+            models.Comment.created_at,
+            models.Comment.updated_at,
+            func.ts_rank(models.Comment.search_vector, search_query).label('rank')
+        ).join(
+            models.Task, models.Comment.task_id == models.Task.id
+        ).filter(
+            models.Comment.search_vector.op('@@')(search_query)
+        )
+
+        # Apply project filter via task join if specified
+        if project_id is not None:
+            comment_query = comment_query.filter(models.Task.project_id == project_id)
+
+        comment_query = comment_query.order_by(
+            desc(func.ts_rank(models.Comment.search_vector, search_query))
+        ).limit(limit)
+
+        comment_results = comment_query.all()
+
+        comments = [
+            schemas.SearchResultComment(
+                id=row.id,
+                content=row.content,
+                task_id=row.task_id,
+                task_title=row.task_title,
+                rank=row.rank,
+                created_at=row.created_at,
+                updated_at=row.updated_at
+            )
+            for row in comment_results
+        ]
+        logger.debug(f"Found {len(comments)} matching comments")
+
+    total_results = len(tasks) + len(projects) + len(comments)
+    logger.info(f"global_search completed: query='{q}', total_results={total_results}")
+
+    return schemas.SearchResults(
+        tasks=tasks,
+        projects=projects,
+        comments=comments,
+        total_results=total_results
+    )
 
 
 # ============== Task Events ==============

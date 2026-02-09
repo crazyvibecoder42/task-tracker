@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -10,6 +10,7 @@ import {
   Lightbulb,
   MessageSquare,
   Plus,
+  Search,
   Sparkles,
   Trash2
 } from 'lucide-react';
@@ -17,6 +18,7 @@ import { STATUS_CONFIG, TaskStatus } from '@/components/StatusConfig';
 import {
   getProject,
   getProjectStats,
+  getTasks,
   getAuthors,
   createTask,
   updateTask,
@@ -39,6 +41,8 @@ export default function ProjectDetail() {
   const [loading, setLoading] = useState(true);
   const [showNewTask, setShowNewTask] = useState(false);
   const [filter, setFilter] = useState<'all' | TaskStatus>('all');
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [searchResults, setSearchResults] = useState<Task[] | null>(null);
 
   // New task form
   const [newTitle, setNewTitle] = useState('');
@@ -51,6 +55,44 @@ export default function ProjectDetail() {
     loadProject();
     getAuthors().then(setAuthors).catch(console.error);
   }, [projectId]);
+
+  // Track search request ID to prevent race conditions
+  const searchRequestIdRef = useRef(0);
+
+  // Search effect - trigger search when query changes
+  useEffect(() => {
+    if (searchQuery.trim()) {
+      // Increment request ID for this search
+      const currentRequestId = ++searchRequestIdRef.current;
+
+      // Perform search
+      const performSearch = async () => {
+        try {
+          const results = await getTasks({
+            project_id: projectId,
+            q: searchQuery.trim()
+          });
+
+          // Only update if this is still the latest request
+          if (currentRequestId === searchRequestIdRef.current) {
+            setSearchResults(results);
+          }
+        } catch (error) {
+          console.error('Failed to search tasks:', error);
+          // Only update error state if this is still the latest request
+          if (currentRequestId === searchRequestIdRef.current) {
+            setSearchResults([]);
+          }
+        }
+      };
+      performSearch();
+    } else {
+      // Clear search results when query is empty
+      // Increment request ID to invalidate any in-flight requests
+      searchRequestIdRef.current++;
+      setSearchResults(null);
+    }
+  }, [searchQuery, projectId]);
 
   const loadProject = async () => {
     try {
@@ -121,11 +163,16 @@ export default function ProjectDetail() {
     }
   };
 
-  const filteredTasks = (project?.tasks?.filter((task) => {
+  // Use search results if searching, otherwise use project tasks
+  const tasksToFilter = searchResults !== null ? searchResults : (project?.tasks || []);
+
+  const filteredTasks = tasksToFilter.filter((task) => {
     if (filter === 'all') return true;
     return task.status === filter;
-  }) || []).sort((a, b) => {
-    // Sort by updated_at descending (most recent first)
+  }).sort((a, b) => {
+    // When searching, results are already sorted by relevance
+    // Otherwise, sort by updated_at descending (most recent first)
+    if (searchResults !== null) return 0;  // Keep backend relevance order
     return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
   });
 
@@ -229,9 +276,36 @@ export default function ProjectDetail() {
 
       {/* Tasks Section */}
       <div className="bg-white rounded-xl border border-gray-200">
-        <div className="p-4 border-b border-gray-200 flex items-center justify-between">
-          <div className="flex items-center gap-4">
+        <div className="p-4 border-b border-gray-200">
+          {/* Header row with title and Add Task button */}
+          <div className="flex items-center justify-between mb-3">
             <h2 className="text-lg font-semibold">Tasks</h2>
+            <button
+              onClick={() => setShowNewTask(!showNewTask)}
+              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+            >
+              <Plus className="w-4 h-4" />
+              Add Task
+            </button>
+          </div>
+
+          {/* Search bar and filters row */}
+          <div className="flex items-center gap-3 flex-wrap">
+            {/* Search Input */}
+            <div className="relative flex-1 min-w-[240px] max-w-md">
+              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                <Search className="h-4 w-4 text-gray-400" />
+              </div>
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search tasks in this project..."
+                className="w-full pl-9 pr-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+              />
+            </div>
+
+            {/* Status filter buttons */}
             <div className="flex gap-1 flex-wrap">
               <button
                 onClick={() => setFilter('all')}
@@ -257,14 +331,17 @@ export default function ProjectDetail() {
                 </button>
               ))}
             </div>
+
+            {/* Clear search button (only show when searching) */}
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="text-sm text-indigo-600 hover:text-indigo-700 font-medium"
+              >
+                Clear search
+              </button>
+            )}
           </div>
-          <button
-            onClick={() => setShowNewTask(!showNewTask)}
-            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
-          >
-            <Plus className="w-4 h-4" />
-            Add Task
-          </button>
         </div>
 
         {/* New Task Form */}
@@ -341,7 +418,10 @@ export default function ProjectDetail() {
         <div className="divide-y divide-gray-100">
           {filteredTasks.length === 0 ? (
             <p className="p-8 text-center text-gray-500">
-              No tasks {filter !== 'all' ? `with status "${filter}"` : ''} yet
+              {searchQuery
+                ? `No tasks found matching "${searchQuery}"`
+                : `No tasks ${filter !== 'all' ? `with status "${filter}"` : ''} yet`
+              }
             </p>
           ) : (
             filteredTasks.map((task) => (
