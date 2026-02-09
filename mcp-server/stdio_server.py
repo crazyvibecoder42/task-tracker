@@ -90,14 +90,25 @@ async def list_tools() -> list[Tool]:
              inputSchema={"type": "object", "properties": {
                  "project_id": {"type": "integer", "description": "Project ID"}
              }, "required": ["project_id"]}),
-        Tool(name="list_tasks", description="List tasks with optional filters",
+        Tool(name="list_tasks", description="List tasks with optional filters. Requires project_id to prevent cross-project queries (see CLAUDE.md).",
              inputSchema={"type": "object", "properties": {
-                 "project_id": {"type": "integer", "description": "Filter by project ID"},
+                 "project_id": {"type": "integer", "description": "Project ID (required - see CLAUDE.md for project assignments)"},
                  "status": {"type": "string", "enum": ["backlog", "todo", "in_progress", "blocked", "review", "done"], "description": "Filter by status"},
                  "priority": {"type": "string", "enum": ["P0", "P1"], "description": "Filter by priority"},
                  "tag": {"type": "string", "enum": ["bug", "feature", "idea"], "description": "Filter by tag"},
-                 "owner_id": {"type": "integer", "description": "Filter by owner ID (use 0 for unassigned tasks)"}
-             }, "required": []}),
+                 "owner_id": {"type": "integer", "description": "Filter by owner ID (use 0 for unassigned tasks)"},
+                 "limit": {"type": "integer", "description": "Optional: Max tasks to return (no default, max: 500). Omit to get all tasks."},
+                 "offset": {"type": "integer", "description": "Pagination offset (default: 0)"}
+             }, "required": ["project_id"]}),
+        Tool(name="list_actionable_tasks", description="List actionable tasks (excludes backlog, blocked, and done tasks). Requires project_id to prevent cross-project queries (see CLAUDE.md).",
+             inputSchema={"type": "object", "properties": {
+                 "project_id": {"type": "integer", "description": "Project ID (required - see CLAUDE.md for project assignments)"},
+                 "priority": {"type": "string", "enum": ["P0", "P1"], "description": "Filter by priority"},
+                 "tag": {"type": "string", "enum": ["bug", "feature", "idea"], "description": "Filter by tag"},
+                 "owner_id": {"type": "integer", "description": "Filter by owner ID (use 0 for unassigned tasks)"},
+                 "limit": {"type": "integer", "description": "Optional: Max tasks to return (no default, max: 500). Omit to get all tasks."},
+                 "offset": {"type": "integer", "description": "Pagination offset (default: 0)"}
+             }, "required": ["project_id"]}),
         Tool(name="create_task", description="Create a new task in a project",
              inputSchema={"type": "object", "properties": {
                  "project_id": {"type": "integer", "description": "Project ID"},
@@ -172,7 +183,63 @@ async def list_tools() -> list[Tool]:
                  "event_type": {"type": "string", "description": "Filter by event type (optional)"},
                  "limit": {"type": "integer", "description": "Max events to return (default: 100, max: 500)"},
                  "offset": {"type": "integer", "description": "Pagination offset (default: 0)"}
-             }, "required": ["project_id"]})
+             }, "required": ["project_id"]}),
+        Tool(name="bulk_update_tasks", description="Update multiple tasks in a single transaction",
+             inputSchema={"type": "object", "properties": {
+                 "task_ids": {"type": "array", "items": {"type": "integer"}, "description": "List of task IDs to update"},
+                 "updates": {"type": "object", "properties": {
+                     "title": {"type": "string", "description": "New task title"},
+                     "description": {"type": "string", "description": "New task description"},
+                     "tag": {"type": "string", "enum": ["bug", "feature", "idea"], "description": "New task tag"},
+                     "priority": {"type": "string", "enum": ["P0", "P1"], "description": "New task priority"},
+                     "status": {"type": "string", "enum": ["backlog", "todo", "in_progress", "blocked", "review", "done"], "description": "New task status"},
+                     "owner_id": {"type": ["integer", "null"], "description": "Owner ID (set to null to release ownership)"},
+                     "parent_task_id": {"type": ["integer", "null"], "description": "Parent task ID for subtasks (set to null to clear parent)"}
+                 }, "description": "Fields to update (all optional)"},
+                 "actor_id": {"type": "integer", "description": "Actor ID for event tracking (optional)"}
+             }, "required": ["task_ids", "updates"]}),
+        Tool(name="bulk_take_ownership", description="Take ownership of multiple tasks at once",
+             inputSchema={"type": "object", "properties": {
+                 "task_ids": {"type": "array", "items": {"type": "integer"}, "description": "List of task IDs to claim"},
+                 "author_id": {"type": "integer", "description": "Author ID to assign as owner"},
+                 "force": {"type": "boolean", "description": "Force reassignment if already owned (default: false)"}
+             }, "required": ["task_ids", "author_id"]}),
+        Tool(name="bulk_delete_tasks", description="Delete multiple tasks in a single transaction (cascades to subtasks)",
+             inputSchema={"type": "object", "properties": {
+                 "task_ids": {"type": "array", "items": {"type": "integer"}, "description": "List of task IDs to delete"},
+                 "actor_id": {"type": "integer", "description": "Actor ID for event tracking (optional)"}
+             }, "required": ["task_ids"]}),
+        Tool(name="bulk_create_tasks", description="Create multiple tasks in a single transaction",
+             inputSchema={"type": "object", "properties": {
+                 "tasks": {"type": "array", "items": {
+                     "type": "object",
+                     "properties": {
+                         "project_id": {"type": "integer", "description": "Project ID"},
+                         "title": {"type": "string", "description": "Task title"},
+                         "description": {"type": "string", "description": "Task description"},
+                         "tag": {"type": "string", "enum": ["bug", "feature", "idea"], "description": "Task tag"},
+                         "priority": {"type": "string", "enum": ["P0", "P1"], "description": "Task priority"},
+                         "status": {"type": "string", "enum": ["backlog", "todo", "in_progress", "blocked", "review", "done"], "description": "Task status"},
+                         "author_id": {"type": "integer", "description": "Author ID (optional)"},
+                         "owner_id": {"type": "integer", "description": "Owner ID (optional)"},
+                         "parent_task_id": {"type": "integer", "description": "Parent task ID for subtasks (optional)"}
+                     },
+                     "required": ["project_id", "title"]
+                 }, "description": "List of tasks to create"},
+                 "actor_id": {"type": "integer", "description": "Actor ID for event tracking (optional)"}
+             }, "required": ["tasks"]}),
+        Tool(name="bulk_add_dependencies", description="Add multiple task dependencies (blocking relationships) in a single transaction",
+             inputSchema={"type": "object", "properties": {
+                 "dependencies": {"type": "array", "items": {
+                     "type": "object",
+                     "properties": {
+                         "blocking_task_id": {"type": "integer", "description": "Task that blocks another"},
+                         "blocked_task_id": {"type": "integer", "description": "Task being blocked"}
+                     },
+                     "required": ["blocking_task_id", "blocked_task_id"]
+                 }, "description": "List of dependencies to create"},
+                 "actor_id": {"type": "integer", "description": "Actor ID for event tracking (optional)"}
+             }, "required": ["dependencies"]})
     ]
 
 
@@ -200,13 +267,57 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     elif name == "delete_project":
         result = await api_request("DELETE", f"/api/projects/{arguments['project_id']}")
     elif name == "list_tasks":
-        params = {}
-        for k in ["project_id", "status", "priority", "tag"]:
-            if k in arguments: params[k] = arguments[k]
-        if "owner_id" in arguments:
-            # Special handling: 0 means filter for NULL owner_id
-            params["owner_id"] = None if arguments["owner_id"] == 0 else arguments["owner_id"]
-        result = await api_request("GET", "/api/tasks", params)
+        # Validate project_id is provided
+        if "project_id" not in arguments or arguments["project_id"] is None:
+            result = {
+                "error": "project_id is required",
+                "message": """ERROR: project_id is required. Please:
+1. Check CLAUDE.md for your project assignment
+2. Call list_projects to see available projects
+3. Choose the appropriate project
+4. Call list_tasks with project_id parameter
+
+Example: list_tasks(project_id=4, status='todo', limit=10)"""
+            }
+        else:
+            params = {}
+            for k in ["project_id", "status", "priority", "tag", "offset"]:
+                if k in arguments: params[k] = arguments[k]
+
+            # Only pass limit if explicitly provided (matches backend opt-in behavior)
+            if "limit" in arguments:
+                params["limit"] = arguments["limit"]
+
+            if "owner_id" in arguments:
+                # Special handling: 0 means filter for NULL owner_id
+                params["owner_id"] = None if arguments["owner_id"] == 0 else arguments["owner_id"]
+            result = await api_request("GET", "/api/tasks", params)
+    elif name == "list_actionable_tasks":
+        # Validate project_id is provided
+        if "project_id" not in arguments or arguments["project_id"] is None:
+            result = {
+                "error": "project_id is required",
+                "message": """ERROR: project_id is required. Please:
+1. Check CLAUDE.md for your project assignment
+2. Call list_projects to see available projects
+3. Choose the appropriate project
+4. Call list_actionable_tasks with project_id parameter
+
+Example: list_actionable_tasks(project_id=4, priority='P0', limit=10)"""
+            }
+        else:
+            params = {}
+            for k in ["project_id", "priority", "tag", "offset"]:
+                if k in arguments: params[k] = arguments[k]
+
+            # Only pass limit if explicitly provided (matches backend opt-in behavior)
+            if "limit" in arguments:
+                params["limit"] = arguments["limit"]
+
+            if "owner_id" in arguments:
+                # Special handling: 0 means filter for NULL owner_id
+                params["owner_id"] = None if arguments["owner_id"] == 0 else arguments["owner_id"]
+            result = await api_request("GET", "/api/tasks/actionable", params)
     elif name == "create_task":
         data = {"project_id": arguments["project_id"], "title": arguments["title"]}
         for k in ["description", "tag", "priority", "author_id", "owner_id"]:
@@ -256,6 +367,31 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         if "offset" in arguments:
             params["offset"] = arguments["offset"]
         result = await api_request("GET", f"/api/projects/{arguments['project_id']}/events", params)
+    elif name == "bulk_update_tasks":
+        data = {"task_ids": arguments["task_ids"], "updates": arguments["updates"]}
+        if "actor_id" in arguments:
+            data["actor_id"] = arguments["actor_id"]
+        result = await api_request("POST", "/api/tasks/bulk-update", data)
+    elif name == "bulk_take_ownership":
+        data = {"task_ids": arguments["task_ids"], "author_id": arguments["author_id"]}
+        if "force" in arguments:
+            data["force"] = arguments["force"]
+        result = await api_request("POST", "/api/tasks/bulk-take-ownership", data)
+    elif name == "bulk_delete_tasks":
+        data = {"task_ids": arguments["task_ids"]}
+        if "actor_id" in arguments:
+            data["actor_id"] = arguments["actor_id"]
+        result = await api_request("POST", "/api/tasks/bulk-delete", data)
+    elif name == "bulk_create_tasks":
+        data = {"tasks": arguments["tasks"]}
+        if "actor_id" in arguments:
+            data["actor_id"] = arguments["actor_id"]
+        result = await api_request("POST", "/api/tasks/bulk-create", data)
+    elif name == "bulk_add_dependencies":
+        data = {"dependencies": arguments["dependencies"]}
+        if "actor_id" in arguments:
+            data["actor_id"] = arguments["actor_id"]
+        result = await api_request("POST", "/api/tasks/bulk-add-dependencies", data)
     else:
         result = {"error": f"Unknown tool: {name}"}
 

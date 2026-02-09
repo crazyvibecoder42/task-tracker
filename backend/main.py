@@ -498,6 +498,8 @@ def list_tasks(
     priority: Optional[schemas.TaskPriority] = Query(None),
     tag: Optional[schemas.TaskTag] = Query(None),
     owner_id: Optional[int] = Query(None),
+    limit: Optional[int] = Query(None, le=500, description="Optional limit for pagination (max 500)"),
+    offset: int = Query(0, ge=0, description="Offset for pagination (only used with limit)"),
     db: Session = Depends(get_db)
 ):
     query = db.query(models.Task).options(
@@ -516,6 +518,13 @@ def list_tasks(
         query = query.filter(models.Task.tag == tag)
     if owner_id is not None:
         query = query.filter(models.Task.owner_id == owner_id)
+
+    # Add deterministic ordering for reliable pagination
+    query = query.order_by(models.Task.id)
+
+    # Apply pagination only if limit is explicitly provided (opt-in)
+    if limit is not None:
+        query = query.offset(offset).limit(limit)
 
     tasks = query.all()
 
@@ -611,6 +620,8 @@ def get_actionable_tasks(
     owner_id: Optional[int] = Query(None),
     priority: Optional[schemas.TaskPriority] = Query(None),
     tag: Optional[schemas.TaskTag] = Query(None),
+    limit: Optional[int] = Query(None, le=500, description="Optional limit for pagination (max 500)"),
+    offset: int = Query(0, ge=0, description="Offset for pagination (only used with limit)"),
     db: Session = Depends(get_db)
 ):
     """
@@ -643,8 +654,11 @@ def get_actionable_tasks(
     if tag:
         query = query.filter(models.Task.tag == tag)
 
-    tasks = query.all()
-    logger.debug(f"Found {len(tasks)} actionable tasks before filtering blocked tasks")
+    # Add deterministic ordering for reliable pagination
+    # Note: We fetch ALL matching tasks first, then apply pagination AFTER
+    # filtering blocked tasks to ensure consistent pagination results
+    tasks = query.order_by(models.Task.id).all()
+    logger.debug(f"Found {len(tasks)} candidate tasks before filtering blocked tasks")
 
     # Filter out blocked tasks
     actionable_tasks = []
@@ -678,9 +692,17 @@ def get_actionable_tasks(
 
     logger.info(f"Found {len(actionable_tasks)} actionable tasks")
 
+    # Apply pagination AFTER filtering blocked tasks (opt-in - only if limit provided)
+    if limit is not None:
+        paginated_tasks = actionable_tasks[offset:offset+limit]
+        logger.info(f"Returning {len(paginated_tasks)} actionable tasks after pagination (offset={offset}, limit={limit})")
+    else:
+        paginated_tasks = actionable_tasks
+        logger.info(f"Returning all {len(paginated_tasks)} actionable tasks (no pagination)")
+
     # Convert to summary format with comment_count
     result = []
-    for task in actionable_tasks:
+    for task in paginated_tasks:
         task_dict = {
             "id": task.id,
             "title": task.title,
