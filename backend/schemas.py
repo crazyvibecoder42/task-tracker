@@ -255,3 +255,52 @@ class ProjectStats(BaseModel):
     bug_count: int
     feature_count: int
     idea_count: int
+
+
+# Bulk operation schemas
+class BulkOperationError(BaseModel):
+    task_id: int
+    error: str
+    error_code: str  # NOT_FOUND, BLOCKED, INCOMPLETE_SUBTASKS, etc.
+
+
+class BulkOperationResult(BaseModel):
+    success: bool
+    processed_count: int = 0
+    task_ids: List[int] = []
+    errors: List[BulkOperationError] = []
+
+
+class BulkTaskUpdate(BaseModel):
+    task_ids: List[int]
+    updates: TaskUpdate
+    actor_id: Optional[int] = None
+
+
+class BulkTakeOwnership(BaseModel):
+    task_ids: List[int]
+    author_id: int
+    force: bool = False
+
+
+class BulkDeleteResult(BaseModel):
+    success: bool
+    deleted_count: int
+    deleted_task_ids: List[int]
+    cascade_deleted_count: int  # Subtasks auto-deleted
+    affected_tasks: List[int]  # Tasks that became unblocked
+
+
+class BulkTaskCreate(BaseModel):
+    tasks: List[TaskCreate]
+    actor_id: Optional[int] = None
+
+
+class BulkTaskDelete(BaseModel):
+    task_ids: List[int]
+    actor_id: Optional[int] = None
+
+
+class BulkAddDependencies(BaseModel):
+    dependencies: List[TaskDependencyBase]
+    actor_id: Optional[int] = None

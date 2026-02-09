@@ -9,8 +9,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Expose MCP port
-EXPOSE 6000
-
-# Run the MCP server
-CMD ["python", "server.py"]
+# Note: stdio_server.py uses stdio transport, not suitable for Docker HTTP access
+# If you need HTTP/SSE transport, consider implementing a dedicated HTTP server
+# For now, this is a placeholder for local stdio usage
+CMD ["python", "stdio_server.py"]

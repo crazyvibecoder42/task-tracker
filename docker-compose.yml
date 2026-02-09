@@ -47,16 +47,9 @@ services:
       - /app/node_modules
       - /app/.next
 
-  mcp-server:
-    build: ./mcp-server
-    container_name: task-tracker-mcp
-    ports:
-      - "6000:6000"
-    environment:
-      TASK_TRACKER_API_URL: http://backend:6001
-      MCP_PORT: "6000"
-    depends_on:
-      - backend
+  # MCP Server is not run via Docker
+  # Use stdio_server.py directly via Claude Code MCP integration
+  # See .mcp.json and mcp-config.json for configuration
 
 volumes:
   postgres_data:

@@ -41,7 +41,7 @@ A full-stack task tracking system with PostgreSQL, FastAPI backend, Next.js fron
    - Frontend: http://localhost:3000
    - Backend API: http://localhost:6001
    - API Documentation: http://localhost:6001/docs
-   - MCP Server (HTTP/SSE): http://localhost:6000
+   - MCP Server: Runs via stdio transport (see `.mcp.json` for Claude Code integration)
 
 3. **Stop the application:**
    ```bash
