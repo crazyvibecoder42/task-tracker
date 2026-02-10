@@ -1799,7 +1799,7 @@ def get_project_events(
 
     if not task_id_list:
         logger.info(f"No tasks found in project {project_id}")
-        return schemas.TaskEventsList(events=[], total=0)
+        return schemas.TaskEventsList(events=[], total_count=0)
 
     # Build query
     query = db.query(models.TaskEvent)\
