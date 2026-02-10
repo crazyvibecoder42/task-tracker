@@ -31,7 +31,8 @@ services:
         condition: service_healthy
     volumes:
       - ./backend:/app
-    command: uvicorn main:app --host 0.0.0.0 --port 6001 --reload
+      - ./uploads:/app/uploads
+    command: uvicorn main:app --host 0.0.0.0 --port 6001 --reload --limit-max-request-size 52428800
 
   frontend:
     build: ./frontend

@@ -9,14 +9,20 @@ import {
   ArrowLeft,
   Bug,
   Clock,
+  Download,
+  ExternalLink as ExternalLinkIcon,
+  FileText,
   GitBranch,
   Info,
   Lightbulb,
+  Link as LinkIcon,
   ListTree,
   MessageSquare,
   Send,
   Sparkles,
+  Tag,
   Trash2,
+  Upload,
   User,
   X,
   History
@@ -36,13 +42,41 @@ import {
   removeTaskDependency,
   getTasks,
   isOverdue,
+  uploadAttachment,
+  deleteAttachment,
+  addExternalLink,
+  removeExternalLink,
+  updateMetadata,
+  deleteMetadata,
+  API_BASE,
   Task,
   Author,
   TaskProgress
 } from '@/lib/api';
 import { STATUS_CONFIG, TaskStatus } from '@/components/StatusConfig';
 import Timeline from '@/components/Timeline';
+import MarkdownRenderer from '@/components/MarkdownRenderer';
 import { utcToLocalInput, localInputToUTC, formatDate } from '@/lib/date-utils';
+
+// Sanitize external link URLs to prevent XSS (defense in depth)
+function sanitizeExternalUrl(url: string): string {
+  if (!url) return '';
+
+  // Allow only safe protocols
+  const allowedProtocols = ['http:', 'https:', 'mailto:'];
+  try {
+    const parsedUrl = new URL(url, window.location.href);
+    if (allowedProtocols.includes(parsedUrl.protocol)) {
+      return url;
+    }
+  } catch {
+    // Invalid URL - return empty to be safe
+    return '';
+  }
+
+  // Unsafe protocol detected - return empty string
+  return '';
+}
 
 export default function TaskDetail() {
   const params = useParams();
@@ -75,6 +109,18 @@ export default function TaskDetail() {
   const [selectedBlockingTaskId, setSelectedBlockingTaskId] = useState<string>('');
   const [submittingDependency, setSubmittingDependency] = useState(false);
   const [dependencyError, setDependencyError] = useState<string>('');
+
+  // Rich Context state
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string>('');
+  const [showAddLink, setShowAddLink] = useState(false);
+  const [newLinkUrl, setNewLinkUrl] = useState('');
+  const [newLinkLabel, setNewLinkLabel] = useState('');
+  const [submittingLink, setSubmittingLink] = useState(false);
+  const [showAddMetadata, setShowAddMetadata] = useState(false);
+  const [newMetadataKey, setNewMetadataKey] = useState('');
+  const [newMetadataValue, setNewMetadataValue] = useState('');
+  const [submittingMetadata, setSubmittingMetadata] = useState(false);
 
   // Edit form
   const [editTitle, setEditTitle] = useState('');
@@ -307,6 +353,100 @@ export default function TaskDetail() {
     } catch (error) {
       console.error('Failed to remove dependency:', error);
       alert('Failed to remove dependency. Please try again.');
+    }
+  };
+
+  // Rich Context handlers
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploading(true);
+    setUploadError('');
+
+    try {
+      await uploadAttachment(taskId, file, 1); // Using author_id=1 (Admin)
+      await loadTask(); // Reload task to show new attachment
+      e.target.value = ''; // Reset file input
+    } catch (error: any) {
+      console.error('Failed to upload file:', error);
+      setUploadError(error.message || 'Failed to upload file');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleDeleteAttachment = async (attachmentId: number) => {
+    if (!confirm('Are you sure you want to delete this attachment?')) return;
+
+    try {
+      await deleteAttachment(taskId, attachmentId, 1);
+      await loadTask();
+    } catch (error) {
+      console.error('Failed to delete attachment:', error);
+      alert('Failed to delete attachment');
+    }
+  };
+
+  const handleAddLink = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newLinkUrl.trim()) return;
+
+    setSubmittingLink(true);
+    try {
+      await addExternalLink(taskId, { url: newLinkUrl, label: newLinkLabel || null }, 1);
+      await loadTask();
+      setNewLinkUrl('');
+      setNewLinkLabel('');
+      setShowAddLink(false);
+    } catch (error) {
+      console.error('Failed to add link:', error);
+      alert('Failed to add link');
+    } finally {
+      setSubmittingLink(false);
+    }
+  };
+
+  const handleRemoveLink = async (url: string) => {
+    if (!confirm('Are you sure you want to remove this link?')) return;
+
+    try {
+      await removeExternalLink(taskId, url, 1);
+      await loadTask();
+    } catch (error) {
+      console.error('Failed to remove link:', error);
+      alert('Failed to remove link');
+    }
+  };
+
+  const handleAddMetadata = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newMetadataKey.trim() || !newMetadataValue.trim()) return;
+
+    setSubmittingMetadata(true);
+    try {
+      await updateMetadata(taskId, { key: newMetadataKey, value: newMetadataValue }, 1);
+      await loadTask();
+      setNewMetadataKey('');
+      setNewMetadataValue('');
+      setShowAddMetadata(false);
+    } catch (error) {
+      console.error('Failed to add metadata:', error);
+      alert('Failed to add metadata');
+    } finally {
+      setSubmittingMetadata(false);
+    }
+  };
+
+  const handleDeleteMetadata = async (key: string) => {
+    if (!confirm(`Are you sure you want to delete the "${key}" metadata?`)) return;
+
+    try {
+      await deleteMetadata(taskId, key, 1);
+      await loadTask();
+    } catch (error) {
+      console.error('Failed to delete metadata:', error);
+      alert('Failed to delete metadata');
     }
   };
 
@@ -594,7 +734,9 @@ export default function TaskDetail() {
                 </div>
               </div>
               {task.description && (
-                <p className="mt-4 text-gray-700 whitespace-pre-wrap">{task.description}</p>
+                <div className="mt-4">
+                  <MarkdownRenderer content={task.description} />
+                </div>
               )}
               <div className="mt-4 flex items-center gap-4 text-sm text-gray-500">
                 {task.author && (
@@ -716,6 +858,250 @@ export default function TaskDetail() {
             </>
           )}
         </div>
+
+        {/* Rich Context & Attachments Section */}
+        {!editing && (
+          <div className="p-6 border-t border-gray-200">
+            <h2 className="text-lg font-semibold flex items-center gap-2 mb-4">
+              <FileText className="w-5 h-5" />
+              Attachments & Links
+            </h2>
+
+            <div className="space-y-6">
+              {/* File Attachments */}
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="font-medium text-gray-900">File Attachments</h3>
+                  <label className="px-3 py-1 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 cursor-pointer text-sm flex items-center gap-2">
+                    <Upload className="w-4 h-4" />
+                    {uploading ? 'Uploading...' : 'Upload File'}
+                    <input
+                      type="file"
+                      className="hidden"
+                      onChange={handleFileUpload}
+                      disabled={uploading}
+                      accept=".pdf,.txt,.md,.doc,.docx,.png,.jpg,.jpeg,.gif,.webp,.json,.xml,.csv,.xlsx,.zip,.tar,.gz"
+                    />
+                  </label>
+                </div>
+
+                {uploadError && (
+                  <div className="mb-3 p-2 bg-red-50 border border-red-200 rounded text-sm text-red-600">
+                    {uploadError}
+                  </div>
+                )}
+
+                {task.attachments && task.attachments.length > 0 ? (
+                  <div className="space-y-2">
+                    {task.attachments.map((attachment) => (
+                      <div
+                        key={attachment.id}
+                        className="flex items-center justify-between bg-gray-50 rounded-lg p-3 border border-gray-200"
+                      >
+                        <div className="flex items-center gap-3 flex-1 min-w-0">
+                          <FileText className="w-5 h-5 text-gray-400 flex-shrink-0" />
+                          <div className="flex-1 min-w-0">
+                            <a
+                              href={`${API_BASE}${attachment.filepath}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-indigo-600 hover:text-indigo-800 hover:underline font-medium truncate block"
+                            >
+                              {attachment.original_filename}
+                            </a>
+                            <p className="text-xs text-gray-500">
+                              {(attachment.file_size / 1024).toFixed(2)} KB
+                              {attachment.uploader && ` • Uploaded by ${attachment.uploader.name}`}
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => handleDeleteAttachment(attachment.id)}
+                          className="ml-2 p-1 text-red-600 hover:text-red-800 flex-shrink-0"
+                          title="Delete attachment"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-gray-500 italic">No attachments yet</p>
+                )}
+              </div>
+
+              {/* External Links */}
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="font-medium text-gray-900">External Links</h3>
+                  <button
+                    onClick={() => setShowAddLink(!showAddLink)}
+                    className="px-3 py-1 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm flex items-center gap-2"
+                  >
+                    <LinkIcon className="w-4 h-4" />
+                    Add Link
+                  </button>
+                </div>
+
+                {showAddLink && (
+                  <form onSubmit={handleAddLink} className="mb-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
+                    <div className="space-y-2">
+                      <input
+                        type="url"
+                        value={newLinkUrl}
+                        onChange={(e) => setNewLinkUrl(e.target.value)}
+                        placeholder="https://example.com"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                        required
+                      />
+                      <input
+                        type="text"
+                        value={newLinkLabel}
+                        onChange={(e) => setNewLinkLabel(e.target.value)}
+                        placeholder="Label (optional)"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                      />
+                      <div className="flex gap-2">
+                        <button
+                          type="submit"
+                          disabled={submittingLink}
+                          className="px-3 py-1 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm disabled:opacity-50"
+                        >
+                          {submittingLink ? 'Adding...' : 'Add'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowAddLink(false);
+                            setNewLinkUrl('');
+                            setNewLinkLabel('');
+                          }}
+                          className="px-3 py-1 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 text-sm"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  </form>
+                )}
+
+                {task.external_links && task.external_links.length > 0 ? (
+                  <div className="space-y-2">
+                    {task.external_links.map((link, index) => (
+                      <div
+                        key={index}
+                        className="flex items-center justify-between bg-gray-50 rounded-lg p-3 border border-gray-200"
+                      >
+                        <div className="flex items-center gap-3 flex-1 min-w-0">
+                          <ExternalLinkIcon className="w-5 h-5 text-gray-400 flex-shrink-0" />
+                          <a
+                            href={sanitizeExternalUrl(link.url)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-indigo-600 hover:text-indigo-800 hover:underline truncate block"
+                          >
+                            {link.label || link.url}
+                          </a>
+                        </div>
+                        <button
+                          onClick={() => handleRemoveLink(link.url)}
+                          className="ml-2 p-1 text-red-600 hover:text-red-800 flex-shrink-0"
+                          title="Remove link"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-gray-500 italic">No external links yet</p>
+                )}
+              </div>
+
+              {/* Custom Metadata */}
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="font-medium text-gray-900">Custom Metadata</h3>
+                  <button
+                    onClick={() => setShowAddMetadata(!showAddMetadata)}
+                    className="px-3 py-1 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm flex items-center gap-2"
+                  >
+                    <Tag className="w-4 h-4" />
+                    Add Metadata
+                  </button>
+                </div>
+
+                {showAddMetadata && (
+                  <form onSubmit={handleAddMetadata} className="mb-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
+                    <div className="space-y-2">
+                      <input
+                        type="text"
+                        value={newMetadataKey}
+                        onChange={(e) => setNewMetadataKey(e.target.value)}
+                        placeholder="Key (e.g., sprint, team, version)"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                        required
+                      />
+                      <input
+                        type="text"
+                        value={newMetadataValue}
+                        onChange={(e) => setNewMetadataValue(e.target.value)}
+                        placeholder="Value"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                        required
+                      />
+                      <div className="flex gap-2">
+                        <button
+                          type="submit"
+                          disabled={submittingMetadata}
+                          className="px-3 py-1 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm disabled:opacity-50"
+                        >
+                          {submittingMetadata ? 'Adding...' : 'Add'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowAddMetadata(false);
+                            setNewMetadataKey('');
+                            setNewMetadataValue('');
+                          }}
+                          className="px-3 py-1 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 text-sm"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  </form>
+                )}
+
+                {task.custom_metadata && Object.keys(task.custom_metadata).length > 0 ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    {Object.entries(task.custom_metadata).map(([key, value]) => (
+                      <div
+                        key={key}
+                        className="flex items-center justify-between bg-gray-50 rounded-lg p-3 border border-gray-200"
+                      >
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-gray-900 truncate">{key}</p>
+                          <p className="text-sm text-gray-600 truncate">{value}</p>
+                        </div>
+                        <button
+                          onClick={() => handleDeleteMetadata(key)}
+                          className="ml-2 p-1 text-red-600 hover:text-red-800 flex-shrink-0"
+                          title="Delete metadata"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-gray-500 italic">No custom metadata yet</p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Dependencies Section */}
         <div className="p-6 border-b border-gray-200">

@@ -1,5 +1,6 @@
-from fastapi import FastAPI, HTTPException, Depends, Query
+from fastapi import FastAPI, HTTPException, Depends, Query, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, or_, desc, asc, text
 from sqlalchemy.sql import func as sql_func
@@ -7,6 +8,9 @@ from typing import List, Optional, Literal
 from collections import deque
 from datetime import datetime, timedelta, timezone
 import logging
+import os
+import uuid
+from pathlib import Path
 
 from database import get_db, engine, Base
 import models
@@ -36,6 +40,141 @@ app.add_middleware(
 )
 
 # Note: Backend now runs on port 6001 (mapped from internal port 8000)
+
+# ============== File Upload Configuration ==============
+
+# File upload constants
+UPLOAD_DIR = Path("/app/uploads")
+MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
+ALLOWED_EXTENSIONS = {
+    ".pdf", ".txt", ".md", ".doc", ".docx",  # Documents
+    ".png", ".jpg", ".jpeg", ".gif", ".webp",  # Images (removed .svg for XSS security)
+    ".json", ".xml", ".csv", ".xlsx",  # Data files
+    ".zip", ".tar", ".gz"  # Archives
+}
+ALLOWED_MIME_TYPES = {
+    "application/pdf",
+    "text/plain", "text/markdown",
+    "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "image/png", "image/jpeg", "image/gif", "image/webp",  # Removed image/svg+xml for XSS security
+    "application/json", "application/xml", "text/xml", "text/csv",  # text/xml for browser compatibility
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/zip", "application/x-tar", "application/gzip"
+}
+
+# Ensure upload directory exists
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+# Mount static files for serving uploads
+app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
+
+
+def validate_file_upload(file: UploadFile) -> None:
+    """Validate file extension and MIME type."""
+    # Check file extension first (primary validation)
+    file_ext = Path(file.filename).suffix.lower()
+    if file_ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File type not allowed. Allowed extensions: {', '.join(ALLOWED_EXTENSIONS)}"
+        )
+
+    # Check MIME type (allow application/octet-stream for valid extensions)
+    # Many clients send octet-stream for binary files, so we trust the extension
+    if file.content_type not in ALLOWED_MIME_TYPES and file.content_type != "application/octet-stream":
+        raise HTTPException(
+            status_code=400,
+            detail=f"MIME type not allowed: {file.content_type}. Allowed extensions: {', '.join(ALLOWED_EXTENSIONS)}"
+        )
+
+
+def validate_external_url(url: str) -> None:
+    """
+    Validate external link URL to prevent XSS via javascript: or data: protocols.
+
+    Allows only safe protocols: http, https, mailto.
+    Raises HTTPException(400) for invalid or dangerous URLs.
+    """
+    if not url or not url.strip():
+        raise HTTPException(status_code=400, detail="URL cannot be empty")
+
+    url = url.strip()
+
+    # Check for safe protocols (case-insensitive)
+    allowed_protocols = ['http://', 'https://', 'mailto:']
+    url_lower = url.lower()
+
+    # Must start with an allowed protocol
+    if not any(url_lower.startswith(proto) for proto in allowed_protocols):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid URL protocol. Allowed protocols: http://, https://, mailto:"
+        )
+
+    # Reject dangerous protocols explicitly (defense in depth)
+    dangerous_protocols = ['javascript:', 'data:', 'vbscript:', 'file:', 'about:']
+    if any(url_lower.startswith(proto) for proto in dangerous_protocols):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Dangerous URL protocol detected: {url_lower.split(':')[0]}"
+        )
+
+
+async def save_upload_file(task_id: int, file: UploadFile) -> tuple[str, str, int]:
+    """
+    Save uploaded file using chunked streaming to prevent memory DoS.
+
+    Reads file in 1MB chunks, validating size incrementally. Aborts immediately
+    if size limit exceeded. Max memory footprint: 1MB (chunk size).
+
+    Returns:
+        tuple: (filename, filepath, file_size)
+    """
+    # Create task-specific directory
+    task_dir = UPLOAD_DIR / str(task_id)
+    task_dir.mkdir(parents=True, exist_ok=True)
+
+    # Generate unique filename
+    file_ext = Path(file.filename).suffix.lower()
+    unique_filename = f"{uuid.uuid4()}{file_ext}"
+    filepath = task_dir / unique_filename
+
+    # Stream file in chunks, validate size incrementally
+    CHUNK_SIZE = 1024 * 1024  # 1MB chunks (max memory footprint)
+    total_size = 0
+
+    try:
+        with open(filepath, "wb") as f:
+            while True:
+                chunk = await file.read(CHUNK_SIZE)  # Read 1MB at a time
+                if not chunk:
+                    break
+
+                total_size += len(chunk)
+
+                # Fail fast if size exceeded
+                if total_size > MAX_FILE_SIZE:
+                    f.close()
+                    if filepath.exists():
+                        filepath.unlink()
+                    raise HTTPException(
+                        status_code=413,  # Payload Too Large
+                        detail=f"File too large. Maximum size: {MAX_FILE_SIZE / (1024*1024):.0f}MB"
+                    )
+
+                f.write(chunk)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        if filepath.exists():
+            filepath.unlink()
+        logger.error(f"Failed to save file: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
+
+    # Return relative path for storage
+    relative_path = f"/uploads/{task_id}/{unique_filename}"
+    return unique_filename, relative_path, total_size
 
 
 # Health check
@@ -529,7 +668,11 @@ def list_tasks(
     if tag:
         query = query.filter(models.Task.tag == tag)
     if owner_id is not None:
-        query = query.filter(models.Task.owner_id == owner_id)
+        # Map owner_id=0 to NULL (unassigned tasks) to match MCP documentation
+        if owner_id == 0:
+            query = query.filter(models.Task.owner_id.is_(None))
+        else:
+            query = query.filter(models.Task.owner_id == owner_id)
 
     # Time tracking filters
     if due_before:
@@ -738,7 +881,11 @@ def get_actionable_tasks(
     if project_id:
         query = query.filter(models.Task.project_id == project_id)
     if owner_id is not None:
-        query = query.filter(models.Task.owner_id == owner_id)
+        # Map owner_id=0 to NULL (unassigned tasks) to match MCP documentation
+        if owner_id == 0:
+            query = query.filter(models.Task.owner_id.is_(None))
+        else:
+            query = query.filter(models.Task.owner_id == owner_id)
     if priority:
         query = query.filter(models.Task.priority == priority)
     if tag:
@@ -979,7 +1126,8 @@ def get_task(task_id: int, db: Session = Depends(get_db)):
         .options(
             joinedload(models.Task.author),
             joinedload(models.Task.owner),
-            joinedload(models.Task.comments).joinedload(models.Comment.author)
+            joinedload(models.Task.comments).joinedload(models.Comment.author),
+            joinedload(models.Task.attachments).joinedload(models.TaskAttachment.uploader)
         )\
         .filter(models.Task.id == task_id)\
         .first()
@@ -1315,7 +1463,7 @@ def create_comment(task_id: int, comment: schemas.CommentCreate, db: Session = D
         task_id=task_id,
         event_type=models.TaskEventType.comment_added,
         actor_id=comment.author_id,
-        metadata={"comment_id": db_comment.id, "content_preview": comment.content[:100]}
+        metadata={"comment_id": db_comment.id, "comment_preview": comment.content[:100]}
     )
 
     # Load author relationship
@@ -1618,7 +1766,7 @@ def get_task_events(
 
     logger.info(f"Found {len(events)} events for task {task_id} (total: {total})")
 
-    return schemas.TaskEventsList(events=events, total=total)
+    return schemas.TaskEventsList(events=events, total_count=total)
 
 
 @app.get("/api/projects/{project_id}/events", response_model=schemas.TaskEventsList)
@@ -1673,7 +1821,7 @@ def get_project_events(
 
     logger.info(f"Found {len(events)} events for project {project_id} (total: {total})")
 
-    return schemas.TaskEventsList(events=events, total=total)
+    return schemas.TaskEventsList(events=events, total_count=total)
 
 
 # ============== Task Dependencies ==============
@@ -1906,6 +2054,353 @@ def remove_task_dependency(task_id: int, blocking_id: int, db: Session = Depends
 
     logger.critical(f"Successfully removed dependency: task {blocking_id} no longer blocks task {task_id}")
     return {"message": "Dependency removed"}
+
+
+# ============== Rich Context & Attachments ==============
+
+@app.post("/api/tasks/{task_id}/attachments", response_model=schemas.Attachment)
+async def upload_attachment(
+    task_id: int,
+    request: Request,
+    file: UploadFile = File(...),
+    uploaded_by: Optional[int] = Query(None),
+    db: Session = Depends(get_db)
+):
+    """Upload a file attachment to a task."""
+    logger.debug(f"Uploading attachment to task {task_id}: {file.filename}")
+
+    # Make Content-Length REQUIRED (fail fast before reading data)
+    content_length = request.headers.get("content-length")
+    if not content_length:
+        raise HTTPException(
+            status_code=411,  # Length Required
+            detail="Content-Length header is required for file uploads"
+        )
+
+    try:
+        content_length_int = int(content_length)
+        if content_length_int > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=413,  # Payload Too Large
+                detail=f"Request too large. Maximum size: {MAX_FILE_SIZE / (1024*1024):.0f}MB"
+            )
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid Content-Length header: {content_length}"
+        )
+
+    # Verify task exists
+    task = db.query(models.Task).filter(models.Task.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    # Validate uploaded_by author exists (if provided)
+    if uploaded_by is not None:
+        author = db.query(models.Author).filter(models.Author.id == uploaded_by).first()
+        if not author:
+            raise HTTPException(status_code=400, detail=f"Author with id {uploaded_by} not found")
+
+    # Validate file
+    validate_file_upload(file)
+
+    # Save file
+    filename, filepath, file_size = await save_upload_file(task_id, file)
+
+    # Create attachment record with DB rollback on failure
+    try:
+        attachment = models.TaskAttachment(
+            task_id=task_id,
+            filename=filename,
+            original_filename=file.filename,
+            filepath=filepath,
+            mime_type=file.content_type,
+            file_size=file_size,
+            uploaded_by=uploaded_by
+        )
+        db.add(attachment)
+        db.commit()
+        db.refresh(attachment)
+    except Exception as e:
+        # Rollback DB transaction
+        db.rollback()
+        # Clean up saved file
+        file_path = UPLOAD_DIR / str(task_id) / filename
+        if file_path.exists():
+            file_path.unlink()
+            logger.error(f"Cleaned up orphaned file after DB error: {file_path}")
+        logger.error(f"Failed to create attachment record: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save attachment")
+
+    # Create event
+    create_task_event(
+        db=db,
+        task_id=task_id,
+        event_type=models.TaskEventType.attachment_added,
+        actor_id=uploaded_by,
+        metadata={
+            "attachment_id": attachment.id,
+            "filename": file.filename,
+            "file_size": file_size
+        }
+    )
+
+    logger.critical(f"Successfully uploaded attachment {attachment.id} to task {task_id}")
+
+    # Load uploader relationship
+    db.refresh(attachment)
+    return attachment
+
+
+@app.get("/api/tasks/{task_id}/attachments", response_model=List[schemas.Attachment])
+def list_attachments(task_id: int, db: Session = Depends(get_db)):
+    """List all attachments for a task."""
+    # Verify task exists
+    task = db.query(models.Task).filter(models.Task.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    attachments = db.query(models.TaskAttachment)\
+        .filter(models.TaskAttachment.task_id == task_id)\
+        .options(joinedload(models.TaskAttachment.uploader))\
+        .all()
+
+    return attachments
+
+
+@app.delete("/api/tasks/{task_id}/attachments/{attachment_id}")
+def delete_attachment(
+    task_id: int,
+    attachment_id: int,
+    actor_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db)
+):
+    """Delete a file attachment."""
+    logger.debug(f"Deleting attachment {attachment_id} from task {task_id}")
+
+    # Find attachment
+    attachment = db.query(models.TaskAttachment)\
+        .filter(
+            models.TaskAttachment.id == attachment_id,
+            models.TaskAttachment.task_id == task_id
+        )\
+        .first()
+
+    if not attachment:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+
+    # Delete file from disk
+    try:
+        file_path = Path(attachment.filepath.replace("/uploads/", str(UPLOAD_DIR) + "/"))
+        if file_path.exists():
+            file_path.unlink()
+            logger.debug(f"Deleted file from disk: {file_path}")
+    except Exception as e:
+        logger.error(f"Failed to delete file from disk: {e}")
+        # Continue anyway - we still want to delete the DB record
+
+    # Save metadata for event
+    original_filename = attachment.original_filename
+
+    # Delete database record
+    db.delete(attachment)
+    db.commit()
+
+    # Create event
+    create_task_event(
+        db=db,
+        task_id=task_id,
+        event_type=models.TaskEventType.attachment_deleted,
+        actor_id=actor_id,
+        metadata={
+            "attachment_id": attachment_id,
+            "filename": original_filename
+        }
+    )
+
+    logger.critical(f"Successfully deleted attachment {attachment_id} from task {task_id}")
+    return {"message": "Attachment deleted"}
+
+
+@app.post("/api/tasks/{task_id}/links")
+def add_external_link(
+    task_id: int,
+    link: schemas.ExternalLinkCreate,
+    actor_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db)
+):
+    """Add an external link to a task."""
+    logger.debug(f"Adding external link to task {task_id}: {link.url}")
+
+    # Verify task exists
+    task = db.query(models.Task).filter(models.Task.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    # Validate URL to prevent XSS
+    validate_external_url(link.url)
+
+    # Initialize external_links if None
+    if task.external_links is None:
+        task.external_links = []
+
+    # Create link object
+    link_obj = {
+        "url": link.url,
+        "label": link.label,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+
+    # Add to JSONB array
+    task.external_links = task.external_links + [link_obj]
+    db.commit()
+
+    # Create event
+    create_task_event(
+        db=db,
+        task_id=task_id,
+        event_type=models.TaskEventType.link_added,
+        actor_id=actor_id,
+        metadata={"link": link_obj}
+    )
+
+    logger.critical(f"Successfully added external link to task {task_id}")
+    return {"message": "Link added", "link": link_obj}
+
+
+@app.delete("/api/tasks/{task_id}/links")
+def remove_external_link(
+    task_id: int,
+    url: str = Query(...),
+    actor_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db)
+):
+    """Remove an external link from a task."""
+    logger.debug(f"Removing external link from task {task_id}: {url}")
+
+    # Verify task exists
+    task = db.query(models.Task).filter(models.Task.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    # Find and remove link
+    if task.external_links:
+        original_links = task.external_links
+        task.external_links = [link for link in task.external_links if link.get("url") != url]
+
+        if len(task.external_links) == len(original_links):
+            raise HTTPException(status_code=404, detail="Link not found")
+
+        # Find removed link for event
+        removed_link = next((link for link in original_links if link.get("url") == url), None)
+
+        db.commit()
+
+        # Create event
+        create_task_event(
+            db=db,
+            task_id=task_id,
+            event_type=models.TaskEventType.link_removed,
+            actor_id=actor_id,
+            metadata={"link": removed_link}
+        )
+
+        logger.critical(f"Successfully removed external link from task {task_id}")
+        return {"message": "Link removed"}
+    else:
+        raise HTTPException(status_code=404, detail="Link not found")
+
+
+@app.put("/api/tasks/{task_id}/metadata")
+def update_metadata(
+    task_id: int,
+    metadata_update: schemas.MetadataUpdate,
+    actor_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db)
+):
+    """Add or update a custom metadata key-value pair."""
+    logger.debug(f"Updating metadata for task {task_id}: {metadata_update.key}={metadata_update.value}")
+
+    # Verify task exists
+    task = db.query(models.Task).filter(models.Task.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    # Validate metadata key (prevent forward slashes for URL compatibility)
+    if '/' in metadata_update.key:
+        raise HTTPException(
+            status_code=400,
+            detail="Metadata keys cannot contain forward slashes (/). Use underscores or hyphens instead."
+        )
+
+    # Initialize custom_metadata if None
+    if task.custom_metadata is None:
+        task.custom_metadata = {}
+
+    # Store old value for event
+    old_value = task.custom_metadata.get(metadata_update.key)
+
+    # Update metadata
+    task.custom_metadata = {**task.custom_metadata, metadata_update.key: metadata_update.value}
+    db.commit()
+
+    # Create event
+    create_task_event(
+        db=db,
+        task_id=task_id,
+        event_type=models.TaskEventType.metadata_updated,
+        actor_id=actor_id,
+        field_name=metadata_update.key,
+        old_value=str(old_value) if old_value is not None else None,
+        new_value=metadata_update.value,
+        metadata={"key": metadata_update.key, "value": metadata_update.value}
+    )
+
+    logger.critical(f"Successfully updated metadata for task {task_id}: {metadata_update.key}")
+    return {"message": "Metadata updated", "key": metadata_update.key, "value": metadata_update.value}
+
+
+@app.delete("/api/tasks/{task_id}/metadata/{key}")
+def delete_metadata(
+    task_id: int,
+    key: str,
+    actor_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db)
+):
+    """Remove a custom metadata key."""
+    logger.debug(f"Deleting metadata key from task {task_id}: {key}")
+
+    # Verify task exists
+    task = db.query(models.Task).filter(models.Task.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    # Check if key exists
+    if not task.custom_metadata or key not in task.custom_metadata:
+        raise HTTPException(status_code=404, detail="Metadata key not found")
+
+    # Store old value for event
+    old_value = task.custom_metadata.get(key)
+
+    # Remove key
+    new_metadata = {k: v for k, v in task.custom_metadata.items() if k != key}
+    task.custom_metadata = new_metadata
+    db.commit()
+
+    # Create event
+    create_task_event(
+        db=db,
+        task_id=task_id,
+        event_type=models.TaskEventType.metadata_updated,
+        actor_id=actor_id,
+        field_name=key,
+        old_value=str(old_value),
+        new_value=None,
+        metadata={"key": key, "deleted": True}
+    )
+
+    logger.critical(f"Successfully deleted metadata key from task {task_id}: {key}")
+    return {"message": "Metadata key deleted"}
 
 
 # ============== Bulk Operations ==============

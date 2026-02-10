@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from datetime import datetime
 from typing import Optional, List
 from enum import Enum
@@ -16,6 +16,15 @@ class TaskPriority(str, Enum):
 
 
 class TaskEventType(str, Enum):
+    """
+    Known event types for task audit trail.
+
+    Note: Database stores event_type as VARCHAR(50) for extensibility.
+    This enum provides type safety for standard event types, but the
+    database may contain additional custom event types without migration.
+    Future MCP plugins and custom integrations can add new event types
+    without requiring database schema changes.
+    """
     task_created = "task_created"
     status_change = "status_change"
     field_update = "field_update"
@@ -23,6 +32,11 @@ class TaskEventType(str, Enum):
     dependency_added = "dependency_added"
     dependency_removed = "dependency_removed"
     comment_added = "comment_added"
+    attachment_added = "attachment_added"
+    attachment_deleted = "attachment_deleted"
+    link_added = "link_added"
+    link_removed = "link_removed"
+    metadata_updated = "metadata_updated"
 
 
 class TaskStatus(str, Enum):
@@ -82,6 +96,48 @@ class Comment(CommentBase):
         from_attributes = True
 
 
+# Task Attachment schemas
+class AttachmentBase(BaseModel):
+    filename: str
+    original_filename: str
+    mime_type: str
+    file_size: int
+
+
+class Attachment(AttachmentBase):
+    id: int
+    task_id: int
+    filepath: str
+    uploaded_by: Optional[int]
+    uploader: Optional[Author] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# External Link schemas
+class ExternalLinkBase(BaseModel):
+    url: str
+    label: Optional[str] = None
+
+
+class ExternalLinkCreate(ExternalLinkBase):
+    pass
+
+
+class ExternalLink(BaseModel):
+    url: str
+    label: Optional[str] = None
+    created_at: str  # ISO datetime string
+
+
+# Metadata schemas
+class MetadataUpdate(BaseModel):
+    key: str
+    value: str
+
+
 # Task Event schemas
 class TaskEventBase(BaseModel):
     task_id: int
@@ -90,7 +146,7 @@ class TaskEventBase(BaseModel):
     field_name: Optional[str] = None
     old_value: Optional[str] = None
     new_value: Optional[str] = None
-    event_metadata: Optional[dict] = None
+    metadata: Optional[dict] = Field(None, validation_alias="event_metadata")
 
 
 class TaskEvent(TaskEventBase):
@@ -100,11 +156,12 @@ class TaskEvent(TaskEventBase):
 
     class Config:
         from_attributes = True
+        populate_by_name = True
 
 
 class TaskEventsList(BaseModel):
     events: List[TaskEvent] = []
-    total: int
+    total_count: int
 
 
 # Task schemas
@@ -113,7 +170,10 @@ class TaskBase(BaseModel):
     description: Optional[str] = None
     tag: TaskTag = TaskTag.feature
     priority: TaskPriority = TaskPriority.P1
-    status: TaskStatus = TaskStatus.todo
+    status: TaskStatus = TaskStatus.backlog  # Aligned with DB default in init.sql
+    due_date: Optional[datetime] = None
+    estimated_hours: Optional[float] = Field(None, ge=0, description="Estimated hours (must be >= 0)")
+    actual_hours: Optional[float] = Field(None, ge=0, description="Actual hours spent (must be >= 0)")
 
 
 class TaskCreate(TaskBase):
@@ -131,6 +191,9 @@ class TaskUpdate(BaseModel):
     status: Optional[TaskStatus] = None
     owner_id: Optional[int] = None
     parent_task_id: Optional[int] = None
+    due_date: Optional[datetime] = None
+    estimated_hours: Optional[float] = Field(None, ge=0, description="Estimated hours (must be >= 0)")
+    actual_hours: Optional[float] = Field(None, ge=0, description="Actual hours spent (must be >= 0)")
 
 
 class TakeOwnership(BaseModel):
@@ -146,7 +209,10 @@ class Task(TaskBase):
     owner_id: Optional[int]
     owner: Optional[Author] = None
     parent_task_id: Optional[int] = None
-    comments: List[Comment] = []
+    comments: List[Comment] = Field(default_factory=list)
+    attachments: List[Attachment] = Field(default_factory=list)
+    external_links: List[dict] = Field(default_factory=list)
+    custom_metadata: dict = Field(default_factory=dict)
     is_blocked: bool = False
     created_at: datetime
     updated_at: datetime
@@ -155,8 +221,16 @@ class Task(TaskBase):
         from_attributes = True
 
 
-class TaskSummary(TaskBase):
+class TaskSummary(BaseModel):
     id: int
+    title: str
+    description: Optional[str] = None
+    tag: TaskTag = TaskTag.feature
+    priority: TaskPriority = TaskPriority.P1
+    status: TaskStatus = TaskStatus.todo
+    due_date: Optional[datetime] = None
+    estimated_hours: Optional[float] = None
+    actual_hours: Optional[float] = None
     project_id: int
     author_id: Optional[int]
     author: Optional[Author] = None
@@ -304,3 +378,53 @@ class BulkTaskDelete(BaseModel):
 class BulkAddDependencies(BaseModel):
     dependencies: List[TaskDependencyBase]
     actor_id: Optional[int] = None
+
+
+# Search result schemas
+class SearchResultTask(BaseModel):
+    id: int
+    title: str
+    description: Optional[str] = None
+    tag: TaskTag
+    priority: TaskPriority
+    status: TaskStatus
+    project_id: int
+    parent_task_id: Optional[int] = None
+    rank: float  # Relevance score from ts_rank
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class SearchResultProject(BaseModel):
+    id: int
+    name: str
+    description: Optional[str] = None
+    rank: float  # Relevance score from ts_rank
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class SearchResultComment(BaseModel):
+    id: int
+    content: str
+    task_id: int
+    task_title: str  # Include task title for context
+    rank: float  # Relevance score from ts_rank
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class SearchResults(BaseModel):
+    tasks: List[SearchResultTask] = []
+    projects: List[SearchResultProject] = []
+    comments: List[SearchResultComment] = []
+    total_results: int = 0

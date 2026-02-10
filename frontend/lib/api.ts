@@ -1,6 +1,6 @@
 import { isOverdue as isTaskOverdue } from './date-utils';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:6001';
+export const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:6001';
 
 export interface Author {
   id: number;
@@ -41,6 +41,9 @@ export interface Task {
   due_date: string | null;
   estimated_hours: number | null;
   actual_hours: number | null;
+  attachments?: Attachment[];
+  external_links?: ExternalLink[];
+  custom_metadata?: Record<string, string>;
   created_at: string;
   updated_at: string;
 }
@@ -70,6 +73,25 @@ export interface TaskProgress {
   total_subtasks: number;
   completed_subtasks: number;
   completion_percentage: number;
+}
+
+export interface Attachment {
+  id: number;
+  task_id: number;
+  filename: string;
+  original_filename: string;
+  filepath: string;
+  mime_type: string;
+  file_size: number;
+  uploaded_by: number | null;
+  uploader: Author | null;
+  created_at: string;
+}
+
+export interface ExternalLink {
+  url: string;
+  label: string | null;
+  created_at: string;
 }
 
 export interface Project {
@@ -270,6 +292,60 @@ export const createComment = (taskId: number, data: { content: string; author_id
   fetchApi<Comment>('/api/tasks/' + taskId + '/comments', { method: 'POST', body: JSON.stringify(data) });
 export const deleteComment = (id: number) =>
   fetchApi<void>('/api/comments/' + id, { method: 'DELETE' });
+
+// Attachments
+export const uploadAttachment = async (taskId: number, file: File, uploadedBy?: number) => {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const url = `${API_BASE}/api/tasks/${taskId}/attachments${uploadedBy ? `?uploaded_by=${uploadedBy}` : ''}`;
+  const response = await fetch(url, {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Upload failed' }));
+    throw new Error(error.detail || 'Upload failed');
+  }
+
+  return response.json() as Promise<Attachment>;
+};
+
+export const getAttachments = (taskId: number) =>
+  fetchApi<Attachment[]>('/api/tasks/' + taskId + '/attachments');
+
+export const deleteAttachment = (taskId: number, attachmentId: number, actorId?: number) =>
+  fetchApi<void>(
+    '/api/tasks/' + taskId + '/attachments/' + attachmentId + (actorId ? '?actor_id=' + actorId : ''),
+    { method: 'DELETE' }
+  );
+
+// External Links
+export const addExternalLink = (taskId: number, data: { url: string; label?: string }, actorId?: number) =>
+  fetchApi<{ message: string; link: ExternalLink }>(
+    '/api/tasks/' + taskId + '/links' + (actorId ? '?actor_id=' + actorId : ''),
+    { method: 'POST', body: JSON.stringify(data) }
+  );
+
+export const removeExternalLink = (taskId: number, url: string, actorId?: number) => {
+  const params = new URLSearchParams({ url });
+  if (actorId) params.append('actor_id', String(actorId));
+  return fetchApi<void>('/api/tasks/' + taskId + '/links?' + params.toString(), { method: 'DELETE' });
+};
+
+// Custom Metadata
+export const updateMetadata = (taskId: number, data: { key: string; value: string }, actorId?: number) =>
+  fetchApi<{ message: string; key: string; value: string }>(
+    '/api/tasks/' + taskId + '/metadata' + (actorId ? '?actor_id=' + actorId : ''),
+    { method: 'PUT', body: JSON.stringify(data) }
+  );
+
+export const deleteMetadata = (taskId: number, key: string, actorId?: number) =>
+  fetchApi<void>(
+    '/api/tasks/' + taskId + '/metadata/' + encodeURIComponent(key) + (actorId ? '?actor_id=' + actorId : ''),
+    { method: 'DELETE' }
+  );
 
 // Stats
 export const getOverallStats = () => fetchApi<OverallStats>('/api/stats');

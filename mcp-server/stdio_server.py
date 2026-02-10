@@ -99,6 +99,9 @@ async def list_tools() -> list[Tool]:
                  "owner_id": {"type": "integer", "description": "Filter by owner ID (use 0 for unassigned tasks)"},
                  "q": {"type": "string", "description": "Text search query (searches title and description)"},
                  "sort_by": {"type": "string", "description": "Multi-field sorting (e.g., '-priority,created_at' for priority desc, created_at asc)"},
+                 "due_before": {"type": "string", "description": "Filter tasks due before this datetime (ISO 8601 format, e.g., 2026-02-20T15:00:00Z)"},
+                 "due_after": {"type": "string", "description": "Filter tasks due after this datetime (ISO 8601 format, e.g., 2026-02-10T00:00:00Z)"},
+                 "overdue": {"type": "boolean", "description": "Filter to show only overdue tasks (due_date < now and status not in (done, backlog))"},
                  "limit": {"type": "integer", "description": "Optional: Max tasks to return (no default, max: 500). Omit to get all tasks."},
                  "offset": {"type": "integer", "description": "Pagination offset (default: 0)"}
              }, "required": ["project_id"]}),
@@ -111,6 +114,19 @@ async def list_tools() -> list[Tool]:
                  "limit": {"type": "integer", "description": "Optional: Max tasks to return (no default, max: 500). Omit to get all tasks."},
                  "offset": {"type": "integer", "description": "Pagination offset (default: 0)"}
              }, "required": ["project_id"]}),
+        Tool(name="list_overdue_tasks", description="List tasks that are overdue (due_date < now and status not in (done, backlog))",
+             inputSchema={"type": "object", "properties": {
+                 "project_id": {"type": "integer", "description": "Filter by project ID (optional)"},
+                 "limit": {"type": "integer", "description": "Max tasks to return (default: 10)"},
+                 "offset": {"type": "integer", "description": "Pagination offset (default: 0)"}
+             }, "required": []}),
+        Tool(name="list_upcoming_tasks", description="List tasks due in the next N days (excludes done and backlog)",
+             inputSchema={"type": "object", "properties": {
+                 "project_id": {"type": "integer", "description": "Filter by project ID (optional)"},
+                 "days": {"type": "integer", "description": "Number of days to look ahead (default: 7)"},
+                 "limit": {"type": "integer", "description": "Max tasks to return (default: 10)"},
+                 "offset": {"type": "integer", "description": "Pagination offset (default: 0)"}
+             }, "required": []}),
         Tool(name="search", description="Global search across tasks, projects, and comments with optional filters",
              inputSchema={"type": "object", "properties": {
                  "q": {"type": "string", "description": "Search query (minimum 2 characters)"},
@@ -129,6 +145,8 @@ async def list_tools() -> list[Tool]:
                  "description": {"type": "string", "description": "Task description"},
                  "tag": {"type": "string", "enum": ["bug", "feature", "idea"], "description": "Task tag"},
                  "priority": {"type": "string", "enum": ["P0", "P1"], "description": "Task priority"},
+                 "due_date": {"type": "string", "description": "ISO 8601 datetime string (e.g., 2026-02-20T15:00:00Z)"},
+                 "estimated_hours": {"type": "number", "description": "Estimated effort in hours (e.g., 5.5)"},
                  "author_id": {"type": "integer", "description": "Author ID (optional)"},
                  "owner_id": {"type": "integer", "description": "Owner ID (optional)"}
              }, "required": ["project_id", "title"]}),
@@ -144,6 +162,9 @@ async def list_tools() -> list[Tool]:
                  "tag": {"type": "string", "enum": ["bug", "feature", "idea"], "description": "New task tag"},
                  "priority": {"type": "string", "enum": ["P0", "P1"], "description": "New task priority"},
                  "status": {"type": "string", "enum": ["backlog", "todo", "in_progress", "blocked", "review", "done"], "description": "New task status"},
+                 "due_date": {"type": "string", "description": "ISO 8601 datetime string (e.g., 2026-02-20T15:00:00Z)"},
+                 "estimated_hours": {"type": "number", "description": "Estimated effort in hours (e.g., 5.5)"},
+                 "actual_hours": {"type": "number", "description": "Actual effort spent in hours (e.g., 6.0)"},
                  "owner_id": {"type": "integer", "description": "Owner ID (set to null to release ownership)"}
              }, "required": ["task_id"]}),
         Tool(name="complete_task", description="Mark a task as completed",
@@ -294,7 +315,7 @@ Example: list_tasks(project_id=4, status='todo', limit=10)"""
             }
         else:
             params = {}
-            for k in ["project_id", "status", "priority", "tag", "offset", "q", "sort_by"]:
+            for k in ["project_id", "status", "priority", "tag", "offset", "q", "sort_by", "due_before", "due_after", "overdue"]:
                 if k in arguments: params[k] = arguments[k]
 
             # Only pass limit if explicitly provided (matches backend opt-in behavior)
@@ -331,6 +352,18 @@ Example: list_actionable_tasks(project_id=4, priority='P0', limit=10)"""
                 # Special handling: 0 means filter for NULL owner_id
                 params["owner_id"] = None if arguments["owner_id"] == 0 else arguments["owner_id"]
             result = await api_request("GET", "/api/tasks/actionable", params)
+    elif name == "list_overdue_tasks":
+        params = {}
+        for k in ["project_id", "limit", "offset"]:
+            if k in arguments:
+                params[k] = arguments[k]
+        result = await api_request("GET", "/api/tasks/overdue", params)
+    elif name == "list_upcoming_tasks":
+        params = {}
+        for k in ["project_id", "days", "limit", "offset"]:
+            if k in arguments:
+                params[k] = arguments[k]
+        result = await api_request("GET", "/api/tasks/upcoming", params)
     elif name == "search":
         params = {"q": arguments["q"]}
 
@@ -350,13 +383,13 @@ Example: list_actionable_tasks(project_id=4, priority='P0', limit=10)"""
         result = await api_request("GET", "/api/search", params)
     elif name == "create_task":
         data = {"project_id": arguments["project_id"], "title": arguments["title"]}
-        for k in ["description", "tag", "priority", "author_id", "owner_id"]:
+        for k in ["description", "tag", "priority", "due_date", "estimated_hours", "author_id", "owner_id"]:
             if k in arguments: data[k] = arguments[k]
         result = await api_request("POST", "/api/tasks", data)
     elif name == "get_task":
         result = await api_request("GET", f"/api/tasks/{arguments['task_id']}")
     elif name == "update_task":
-        data = {k: arguments[k] for k in ["title", "description", "tag", "priority", "status", "owner_id"] if k in arguments}
+        data = {k: arguments[k] for k in ["title", "description", "tag", "priority", "status", "due_date", "estimated_hours", "actual_hours", "owner_id"] if k in arguments}
         result = await api_request("PUT", f"/api/tasks/{arguments['task_id']}", data)
     elif name == "complete_task":
         result = await api_request("PUT", f"/api/tasks/{arguments['task_id']}", {"status": "done"})

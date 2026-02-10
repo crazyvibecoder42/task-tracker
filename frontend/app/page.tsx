@@ -3,13 +3,16 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { AlertCircle, Clock, FolderKanban, TrendingUp, Inbox, Circle, PlayCircle, XCircle, Eye, CheckCircle2 } from 'lucide-react';
-import { getOverallStats, getProjects, getTasks, OverallStats, Project, Task } from '@/lib/api';
+import { getOverallStats, getProjects, getTasks, getOverdueTasks, getUpcomingTasks, OverallStats, Project, Task } from '@/lib/api';
 import { STATUS_CONFIG } from '@/components/StatusConfig';
+import { formatDistanceToNow } from 'date-fns';
 
 export default function Dashboard() {
   const [stats, setStats] = useState<OverallStats | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [recentTasks, setRecentTasks] = useState<Task[]>([]);
+  const [overdueTasks, setOverdueTasks] = useState<Task[]>([]);
+  const [upcomingTasks, setUpcomingTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -18,14 +21,18 @@ export default function Dashboard() {
 
   const loadData = async () => {
     try {
-      const [statsData, projectsData, tasksData] = await Promise.all([
+      const [statsData, projectsData, tasksData, overdueData, upcomingData] = await Promise.all([
         getOverallStats(),
         getProjects(),
-        getTasks()
+        getTasks(),
+        getOverdueTasks(5),
+        getUpcomingTasks(7, 5)
       ]);
       setStats(statsData);
       setProjects(projectsData);
       setRecentTasks(tasksData.slice(0, 5));
+      setOverdueTasks(overdueData);
+      setUpcomingTasks(upcomingData);
     } catch (error) {
       console.error('Failed to load dashboard data:', error);
     } finally {
@@ -161,6 +168,98 @@ export default function Dashboard() {
             className="bg-green-500 h-3 rounded-full transition-all duration-500"
             style={{ width: `${stats?.completion_rate || 0}%` }}
           ></div>
+        </div>
+      </div>
+
+      {/* Upcoming & Overdue */}
+      <div className="mb-8">
+        <h2 className="text-lg font-semibold text-gray-900 mb-4">Upcoming & Overdue</h2>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Overdue Tasks */}
+          <div className="bg-red-50 rounded-xl border border-red-200 shadow-sm">
+            <div className="p-6 border-b border-red-200 flex items-center gap-3">
+              <div className="p-2 bg-red-100 rounded-lg">
+                <AlertCircle className="w-5 h-5 text-red-600" />
+              </div>
+              <h3 className="text-base font-semibold text-red-900">Overdue Tasks</h3>
+            </div>
+            <div className="divide-y divide-red-100">
+              {overdueTasks.length === 0 ? (
+                <p className="p-6 text-red-600 text-center text-sm">No overdue tasks</p>
+              ) : (
+                overdueTasks.map((task) => (
+                  <Link
+                    key={task.id}
+                    href={`/tasks/${task.id}`}
+                    className="block p-4 hover:bg-red-100 transition-colors"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-red-900 truncate">{task.title}</p>
+                        {task.due_date && (
+                          <p className="text-xs text-red-600 mt-1">
+                            Due {formatDistanceToNow(new Date(task.due_date), { addSuffix: true })}
+                          </p>
+                        )}
+                      </div>
+                      <span
+                        className={`shrink-0 px-2 py-0.5 text-xs rounded-full font-medium ${
+                          task.priority === 'P0'
+                            ? 'bg-red-200 text-red-900'
+                            : 'bg-red-100 text-red-700'
+                        }`}
+                      >
+                        {task.priority}
+                      </span>
+                    </div>
+                  </Link>
+                ))
+              )}
+            </div>
+          </div>
+
+          {/* Upcoming Tasks */}
+          <div className="bg-yellow-50 rounded-xl border border-yellow-200 shadow-sm">
+            <div className="p-6 border-b border-yellow-200 flex items-center gap-3">
+              <div className="p-2 bg-yellow-100 rounded-lg">
+                <Clock className="w-5 h-5 text-yellow-600" />
+              </div>
+              <h3 className="text-base font-semibold text-yellow-900">Upcoming Tasks</h3>
+            </div>
+            <div className="divide-y divide-yellow-100">
+              {upcomingTasks.length === 0 ? (
+                <p className="p-6 text-yellow-600 text-center text-sm">No upcoming tasks</p>
+              ) : (
+                upcomingTasks.map((task) => (
+                  <Link
+                    key={task.id}
+                    href={`/tasks/${task.id}`}
+                    className="block p-4 hover:bg-yellow-100 transition-colors"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-yellow-900 truncate">{task.title}</p>
+                        {task.due_date && (
+                          <p className="text-xs text-yellow-600 mt-1">
+                            Due {formatDistanceToNow(new Date(task.due_date), { addSuffix: true })}
+                          </p>
+                        )}
+                      </div>
+                      <span
+                        className={`shrink-0 px-2 py-0.5 text-xs rounded-full font-medium ${
+                          task.priority === 'P0'
+                            ? 'bg-yellow-200 text-yellow-900'
+                            : 'bg-yellow-100 text-yellow-700'
+                        }`}
+                      >
+                        {task.priority}
+                      </span>
+                    </div>
+                  </Link>
+                ))
+              )}
+            </div>
+          </div>
         </div>
       </div>
 

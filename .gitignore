@@ -57,3 +57,13 @@ coverage/
 *.png
 *.jpg
 *.jpeg
+
+# File uploads (user data, should never be committed)
+uploads/
+backend/uploads/
+
+# Test artifacts and temporary files
+*-snapshot.txt
+*-after-fix.txt
+*-test.txt
+tasks-*.txt

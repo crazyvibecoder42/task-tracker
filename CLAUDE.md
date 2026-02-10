@@ -8,6 +8,8 @@ This repository contains the Task Tracker application with enhanced features for
 
 **Author/Owner ID:** `aman`
 
+**Project Assignment:** Task Tracker Enhancements - AI Agent Features (Project ID: 4)
+
 When interacting with the task-tracker backend API (http://localhost:6001), always use `author_id: 1` (aman) for:
 - Creating tasks (`POST /api/tasks`)
 - Creating comments (`POST /api/tasks/{id}/comments`)
@@ -74,10 +76,16 @@ mcp__task-tracker__take_ownership(task_id, author_id=1)
 - Parent-subtask deadlock prevention
 
 ### MCP Server Integration
-- 10 MCP tools for AI agent workflows (added event retrieval tools)
+- 12+ MCP tools for AI agent workflows
 - Real-time task management
 - Dependency-aware task queries
 - Event timeline tracking with `get_task_events` and `get_project_events`
+- Time tracking tools:
+  - `list_overdue_tasks(project_id, limit)` - Query overdue tasks
+  - `list_upcoming_tasks(project_id, days, limit)` - Query upcoming tasks
+- Task creation/update with time fields:
+  - `create_task(..., due_date="2026-02-25T14:00:00Z", estimated_hours=10.0)`
+  - `update_task(task_id, actual_hours=8.5)`
 
 ### Event Tracking
 - Comprehensive audit trail for all task operations
@@ -92,6 +100,17 @@ mcp__task-tracker__take_ownership(task_id, author_id=1)
   - `comment_added` - Comment was added to task
 - Event metadata includes actor information, old/new values, and contextual data
 - Events are queryable with filtering by event type and pagination support
+
+### Time Tracking
+- Three new fields for time management: `due_date`, `estimated_hours`, `actual_hours`
+- Overdue detection and visual indicators (red badges)
+- Progress calculation based on actual vs estimated hours
+- Dashboard widget showing overdue and upcoming tasks
+- Date-based filtering and sorting
+- **Overdue Definition:** Tasks with `due_date` in the past and status not in (`done`, `backlog`)
+- **Progress Calculation:** `(actual_hours / estimated_hours) * 100`
+  - Green progress bar when under budget (actual < estimated)
+  - Red progress bar when over budget (actual > estimated)
 
 ## Database Schema
 
@@ -134,6 +153,21 @@ mcp__task-tracker__take_ownership(task_id, author_id=1)
 - `GET /api/projects/{id}/events` - Get event history for all tasks in a project
   - Query params: `event_type` (filter), `limit` (max 500), `offset` (pagination)
 
+### Time Tracking
+- `GET /api/tasks/overdue` - List overdue tasks (due_date in past, status not done)
+  - Query params: `project_id` (filter by project), `limit` (default: 50)
+  - Example: `curl http://localhost:6001/api/tasks/overdue?project_id=4&limit=10`
+- `GET /api/tasks/upcoming` - List upcoming tasks (due within N days)
+  - Query params: `days` (default: 7), `project_id` (filter), `limit` (default: 50)
+  - Example: `curl http://localhost:6001/api/tasks/upcoming?days=14&limit=10`
+- `GET /api/tasks` - Enhanced with date filtering
+  - Query params: `due_after` (ISO 8601 datetime), `due_before` (ISO 8601 datetime), `overdue` (boolean)
+  - Example: `curl "http://localhost:6001/api/tasks?due_after=2026-02-01T00:00:00Z&due_before=2026-03-01T23:59:59Z"`
+- `POST /api/tasks` - Create task with time tracking fields
+  - Body: `{"title": "...", "due_date": "2026-02-25T14:00:00Z", "estimated_hours": 10.0, "author_id": 1}`
+- `PUT /api/tasks/{id}` - Update task with actual hours
+  - Body: `{"actual_hours": 8.5}`
+
 ## Business Rules
 
 ### Task Completion
@@ -154,6 +188,16 @@ mcp__task-tracker__take_ownership(task_id, author_id=1)
 3. Circular dependency check
 4. Parent-subtask deadlock check
 5. Status and completion validations
+
+### Time Tracking
+- All three time fields (`due_date`, `estimated_hours`, `actual_hours`) are optional
+- Overdue tasks are defined as: `due_date < now() AND status NOT IN ('done', 'backlog')`
+- Upcoming tasks are: `due_date BETWEEN now() AND now() + N days AND status NOT IN ('done', 'backlog')`
+- Progress percentage: `(actual_hours / estimated_hours) * 100` when both fields are present
+- Over-budget indicator: actual_hours > estimated_hours (shown in red)
+- Under-budget indicator: actual_hours <= estimated_hours (shown in green)
+- Tasks without due_date are excluded from overdue/upcoming queries
+- Date filters expect ISO 8601 datetime format (e.g., `2026-02-01T00:00:00Z`)
 
 ## Development Workflow
 
@@ -190,6 +234,26 @@ docker-compose restart backend
 curl http://localhost:6001/api/tasks
 curl http://localhost:6001/api/tasks/actionable
 ```
+
+## Documentation Policy
+
+**IMPORTANT:** Do NOT create temporary documentation files (.md) for testing, bug reports, planning, or status tracking. These files clutter the repository and should be avoided.
+
+**Allowed .md files:**
+- `README.md` - Essential project documentation
+- `CLAUDE.md` - This file (project instructions for AI)
+
+**Do NOT create:**
+- Test plans, test results, or test status files
+- Bug reports or issue tracking files
+- Design documents or planning files
+- Status update files or progress tracking
+
+**Instead:**
+- Use inline comments in code or test files
+- Track issues in the task tracker system itself
+- Store plans in auto memory (`~/.claude/projects/.../memory/`)
+- Use git commit messages for change history
 
 ## Worktree Configuration
 
