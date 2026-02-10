@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { formatDistanceToNow } from 'date-fns';
 import {
   AlertCircle,
   ArrowLeft,
@@ -34,12 +35,14 @@ import {
   addTaskDependency,
   removeTaskDependency,
   getTasks,
+  isOverdue,
   Task,
   Author,
   TaskProgress
 } from '@/lib/api';
 import { STATUS_CONFIG, TaskStatus } from '@/components/StatusConfig';
 import Timeline from '@/components/Timeline';
+import { utcToLocalInput, localInputToUTC, formatDate } from '@/lib/date-utils';
 
 export default function TaskDetail() {
   const params = useParams();
@@ -79,6 +82,9 @@ export default function TaskDetail() {
   const [editTag, setEditTag] = useState<'bug' | 'feature' | 'idea'>('feature');
   const [editPriority, setEditPriority] = useState<'P0' | 'P1'>('P1');
   const [editStatus, setEditStatus] = useState<TaskStatus>('todo');
+  const [editDueDate, setEditDueDate] = useState('');
+  const [editEstimatedHours, setEditEstimatedHours] = useState('');
+  const [editActualHours, setEditActualHours] = useState('');
 
   useEffect(() => {
     loadTask();
@@ -97,6 +103,10 @@ export default function TaskDetail() {
       setEditPriority(data.priority);
       setEditStatus(data.status);
       setSelectedOwnerId(data.owner_id);
+      // Format due_date for datetime-local input (if it exists)
+      setEditDueDate(data.due_date ? utcToLocalInput(data.due_date) : '');
+      setEditEstimatedHours(data.estimated_hours?.toString() || '');
+      setEditActualHours(data.actual_hours?.toString() || '');
     } catch (error) {
       console.error('Failed to load task:', error);
     } finally {
@@ -155,7 +165,10 @@ export default function TaskDetail() {
         description: editDescription || undefined,
         tag: editTag,
         priority: editPriority,
-        status: editStatus
+        status: editStatus,
+        due_date: editDueDate ? localInputToUTC(editDueDate) : null,
+        estimated_hours: editEstimatedHours !== '' ? parseFloat(editEstimatedHours) : null,
+        actual_hours: editActualHours !== '' ? parseFloat(editActualHours) : null
       });
       setEditing(false);
       loadTask();
@@ -310,10 +323,6 @@ export default function TaskDetail() {
     }
   };
 
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleString();
-  };
-
   if (loading) {
     return (
       <div className="p-8 flex items-center justify-center">
@@ -391,6 +400,48 @@ export default function TaskDetail() {
                   <option value="review">Review</option>
                   <option value="done">Done</option>
                 </select>
+              </div>
+              {/* Time Tracking Fields */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Due Date
+                  </label>
+                  <input
+                    type="datetime-local"
+                    value={editDueDate}
+                    onChange={(e) => setEditDueDate(e.target.value)}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Estimated Hours
+                  </label>
+                  <input
+                    type="number"
+                    step="0.25"
+                    min="0"
+                    value={editEstimatedHours}
+                    onChange={(e) => setEditEstimatedHours(e.target.value)}
+                    placeholder="5.5"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Actual Hours
+                  </label>
+                  <input
+                    type="number"
+                    step="0.25"
+                    min="0"
+                    value={editActualHours}
+                    onChange={(e) => setEditActualHours(e.target.value)}
+                    placeholder="4.75"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
               </div>
               <div className="flex gap-2">
                 <button
@@ -557,6 +608,111 @@ export default function TaskDetail() {
                   {formatDate(task.created_at)}
                 </span>
               </div>
+
+              {/* Time Tracking Display Section */}
+              {(task.due_date || task.estimated_hours !== null || task.actual_hours !== null) && (
+                <div className="mt-6 border-t border-gray-200 pt-6">
+                  <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                    <Clock className="w-5 h-5 text-indigo-600" />
+                    Time Tracking
+                  </h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {/* Due Date Section */}
+                    {task.due_date && (
+                      <div>
+                        <p className="text-sm font-medium text-gray-700 mb-2">Due Date</p>
+                        <div className="flex items-center gap-2">
+                          <p className="text-gray-900">
+                            {new Date(task.due_date).toLocaleString('en-US', {
+                              month: 'short',
+                              day: 'numeric',
+                              year: 'numeric',
+                              hour: 'numeric',
+                              minute: '2-digit'
+                            })}
+                          </p>
+                          <span className="text-sm text-gray-500">
+                            ({formatDistanceToNow(new Date(task.due_date), { addSuffix: true })})
+                          </span>
+                        </div>
+                        {isOverdue(task) && (
+                          <div className="mt-2 inline-flex items-center gap-1 px-3 py-1 bg-red-100 text-red-700 rounded-full border border-red-300">
+                            <AlertCircle className="w-4 h-4" />
+                            <span className="text-sm font-medium">OVERDUE</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Hours Tracking Section */}
+                    {(task.estimated_hours !== null || task.actual_hours !== null) && (
+                      <div>
+                        <p className="text-sm font-medium text-gray-700 mb-2">Hours Tracking</p>
+                        <div className="space-y-2">
+                          {task.estimated_hours !== null && (
+                            <div className="flex justify-between text-sm">
+                              <span className="text-gray-600">Estimated:</span>
+                              <span className="font-medium text-gray-900">
+                                {task.estimated_hours}h
+                              </span>
+                            </div>
+                          )}
+                          {task.actual_hours !== null && (
+                            <div className="flex justify-between text-sm">
+                              <span className="text-gray-600">Actual:</span>
+                              <span className="font-medium text-gray-900">
+                                {task.actual_hours}h
+                              </span>
+                            </div>
+                          )}
+                          {task.estimated_hours !== null && task.actual_hours !== null && (
+                            <div className="mt-3">
+                              <div className="flex justify-between text-xs text-gray-600 mb-1">
+                                <span>Progress</span>
+                                <span>
+                                  {task.estimated_hours > 0
+                                    ? `${Math.round((task.actual_hours / task.estimated_hours) * 100)}%`
+                                    : 'N/A'}
+                                </span>
+                              </div>
+                              {task.estimated_hours > 0 ? (
+                                <>
+                                  <div className="w-full bg-gray-200 rounded-full h-2.5">
+                                    <div
+                                      className={`h-2.5 rounded-full transition-all duration-300 ${
+                                        task.actual_hours <= task.estimated_hours
+                                          ? 'bg-green-500'
+                                          : 'bg-red-500'
+                                      }`}
+                                      style={{
+                                        width: `${Math.min((task.actual_hours / task.estimated_hours) * 100, 100)}%`
+                                      }}
+                                    ></div>
+                                  </div>
+                                  {task.actual_hours > task.estimated_hours && (
+                                    <p className="mt-1 text-xs text-red-600">
+                                      Over budget by {(task.actual_hours - task.estimated_hours).toFixed(2)}h
+                                    </p>
+                                  )}
+                                  {task.actual_hours <= task.estimated_hours && (
+                                    <p className="mt-1 text-xs text-green-600">
+                                      Under budget by {(task.estimated_hours - task.actual_hours).toFixed(2)}h
+                                    </p>
+                                  )}
+                                </>
+                              ) : (
+                                <p className="mt-1 text-xs text-gray-600">
+                                  Cannot calculate progress (estimated hours is 0)
+                                </p>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </>
           )}
         </div>

@@ -1,3 +1,5 @@
+import { isOverdue as isTaskOverdue } from './date-utils';
+
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:6001';
 
 export interface Author {
@@ -36,6 +38,9 @@ export interface Task {
   blocking_tasks?: Task[];
   blocked_tasks?: Task[];
   is_blocked?: boolean;
+  due_date: string | null;
+  estimated_hours: number | null;
+  actual_hours: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -108,6 +113,11 @@ export interface OverallStats {
   completion_rate: number;
 }
 
+// Helper function to check if a task is overdue (re-exported from date-utils)
+export function isOverdue(task: Task): boolean {
+  return isTaskOverdue(task);
+}
+
 async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${endpoint}`, {
     ...options,
@@ -146,16 +156,33 @@ export const deleteProject = (id: number) =>
   fetchApi<void>('/api/projects/' + id, { method: 'DELETE' });
 
 // Tasks
-export const getTasks = (params?: { project_id?: number; status?: string; priority?: string; tag?: string }) => {
+export const getTasks = (params?: {
+  project_id?: number;
+  status?: string;
+  priority?: string;
+  tag?: string;
+  q?: string;
+  due_before?: string;
+  due_after?: string;
+  overdue?: boolean;
+}) => {
   const searchParams = new URLSearchParams();
   if (params?.project_id) searchParams.append('project_id', String(params.project_id));
+  if (params?.q) searchParams.append('q', params.q);
   if (params?.status) searchParams.append('status', params.status);
   if (params?.priority) searchParams.append('priority', params.priority);
   if (params?.tag) searchParams.append('tag', params.tag);
+  if (params?.due_before) searchParams.append('due_before', params.due_before);
+  if (params?.due_after) searchParams.append('due_after', params.due_after);
+  if (params?.overdue !== undefined) searchParams.append('overdue', String(params.overdue));
   const query = searchParams.toString();
   return fetchApi<Task[]>('/api/tasks' + (query ? '?' + query : ''));
 };
 export const getTask = (id: number) => fetchApi<Task>('/api/tasks/' + id);
+export const getOverdueTasks = (limit: number = 5) =>
+  fetchApi<Task[]>('/api/tasks/overdue?limit=' + limit);
+export const getUpcomingTasks = (days: number = 7, limit: number = 5) =>
+  fetchApi<Task[]>('/api/tasks/upcoming?days=' + days + '&limit=' + limit);
 export const createTask = (data: {
   project_id: number;
   title: string;
@@ -164,6 +191,8 @@ export const createTask = (data: {
   priority?: 'P0' | 'P1';
   author_id?: number;
   parent_task_id?: number;
+  due_date?: string;
+  estimated_hours?: number;
 }) => fetchApi<Task>('/api/tasks', { method: 'POST', body: JSON.stringify(data) });
 export const updateTask = (id: number, data: {
   title?: string;
@@ -173,6 +202,9 @@ export const updateTask = (id: number, data: {
   status?: 'backlog' | 'todo' | 'in_progress' | 'blocked' | 'review' | 'done';
   owner_id?: number | null;
   parent_task_id?: number;
+  due_date?: string | null;
+  estimated_hours?: number | null;
+  actual_hours?: number | null;
 }) => fetchApi<Task>('/api/tasks/' + id, { method: 'PUT', body: JSON.stringify(data) });
 export const deleteTask = (id: number) =>
   fetchApi<void>('/api/tasks/' + id, { method: 'DELETE' });

@@ -5,11 +5,13 @@ from sqlalchemy import func, or_, desc, asc, text
 from sqlalchemy.sql import func as sql_func
 from typing import List, Optional, Literal
 from collections import deque
+from datetime import datetime, timedelta, timezone
 import logging
 
 from database import get_db, engine, Base
 import models
 import schemas
+from time_utils import utc_now
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -499,13 +501,16 @@ def list_tasks(
     priority: Optional[schemas.TaskPriority] = Query(None),
     tag: Optional[schemas.TaskTag] = Query(None),
     owner_id: Optional[int] = Query(None),
+    due_before: Optional[datetime] = Query(None, description="Filter tasks due before this date"),
+    due_after: Optional[datetime] = Query(None, description="Filter tasks due after this date"),
+    overdue: Optional[bool] = Query(None, description="Filter overdue tasks (due_date < now, excludes done and backlog)"),
     q: Optional[str] = Query(None, description="Full-text search query"),
     sort_by: Optional[str] = Query(None, description="Sort field(s): created_at, updated_at, priority, status, rank (comma-separated, prefix with - for desc)"),
     limit: Optional[int] = Query(None, le=500, description="Optional limit for pagination (max 500)"),
     offset: int = Query(0, ge=0, description="Offset for pagination (only used with limit)"),
     db: Session = Depends(get_db)
 ):
-    logger.debug(f"list_tasks called with q={q}, sort_by={sort_by}, filters: project={project_id}, status={status}, priority={priority}, tag={tag}, owner={owner_id}")
+    logger.debug(f"list_tasks called with q={q}, sort_by={sort_by}, filters: project={project_id}, status={status}, priority={priority}, tag={tag}, owner={owner_id}, due_before={due_before}, due_after={due_after}, overdue={overdue}")
 
     # Base query with eager loading
     query = db.query(models.Task).options(
@@ -525,6 +530,18 @@ def list_tasks(
         query = query.filter(models.Task.tag == tag)
     if owner_id is not None:
         query = query.filter(models.Task.owner_id == owner_id)
+
+    # Time tracking filters
+    if due_before:
+        query = query.filter(models.Task.due_date < due_before)
+    if due_after:
+        query = query.filter(models.Task.due_date >= due_after)
+    if overdue is True:
+        now = utc_now()
+        query = query.filter(
+            models.Task.due_date < now,
+            models.Task.status.notin_([models.TaskStatus.done, models.TaskStatus.backlog])
+        )
 
     # Full-text search if query provided
     if q:
@@ -611,6 +628,9 @@ def list_tasks(
             "tag": task.tag,
             "priority": task.priority,
             "status": task.status,
+            "due_date": task.due_date,
+            "estimated_hours": float(task.estimated_hours) if task.estimated_hours is not None else None,
+            "actual_hours": float(task.actual_hours) if task.actual_hours is not None else None,
             "project_id": task.project_id,
             "author_id": task.author_id,
             "author": task.author,
@@ -780,6 +800,81 @@ def get_actionable_tasks(
             "tag": task.tag,
             "priority": task.priority,
             "status": task.status,
+            "due_date": task.due_date,
+            "estimated_hours": float(task.estimated_hours) if task.estimated_hours is not None else None,
+            "actual_hours": float(task.actual_hours) if task.actual_hours is not None else None,
+            "project_id": task.project_id,
+            "author_id": task.author_id,
+            "author": task.author,
+            "owner_id": task.owner_id,
+            "owner": task.owner,
+            "parent_task_id": task.parent_task_id,
+            "comment_count": len(task.comments),
+            "is_blocked": False,
+            "created_at": task.created_at,
+            "updated_at": task.updated_at
+        }
+        result.append(task_dict)
+
+    logger.critical(f"Successfully retrieved {len(result)} actionable tasks")
+    return result
+
+
+@app.get("/api/tasks/overdue", response_model=List[schemas.TaskSummary])
+def get_overdue_tasks(
+    project_id: Optional[int] = Query(None),
+    limit: int = Query(10, le=500, description="Limit for pagination (max 500, default 10)"),
+    offset: int = Query(0, ge=0, description="Offset for pagination"),
+    db: Session = Depends(get_db)
+):
+    """
+    Query overdue tasks (due_date < now, excludes done and backlog).
+    Returns actionable tasks that are past their due date.
+    Backlog tasks are excluded as they are not yet actionable.
+    """
+    logger.debug(f"Getting overdue tasks with filters: project_id={project_id}, limit={limit}, offset={offset}")
+
+    # Calculate current time using timezone-aware datetime (consistent with upcoming endpoint)
+    now = utc_now()
+
+    # Query overdue tasks
+    query = db.query(models.Task)\
+        .options(
+            joinedload(models.Task.author),
+            joinedload(models.Task.owner),
+            joinedload(models.Task.comments)
+        )\
+        .filter(
+            models.Task.due_date < now,
+            models.Task.status.notin_([models.TaskStatus.done, models.TaskStatus.backlog])
+        )
+
+    # Apply project filter if provided
+    if project_id:
+        query = query.filter(models.Task.project_id == project_id)
+
+    # Get total count before pagination
+    total_count = query.count()
+    logger.debug(f"Found {total_count} overdue tasks before pagination")
+
+    # Apply pagination
+    query = query.order_by(models.Task.due_date).offset(offset).limit(limit)
+    tasks = query.all()
+
+    # Bulk calculate is_blocked for all tasks to avoid N+1 queries
+    task_ids = [task.id for task in tasks]
+    is_blocked_map = bulk_calculate_is_blocked(db, task_ids)
+
+    # Convert to summary format with comment_count
+    result = []
+    for task in tasks:
+        task_dict = {
+            "id": task.id,
+            "title": task.title,
+            "description": task.description,
+            "tag": task.tag,
+            "priority": task.priority,
+            "status": task.status,
             "project_id": task.project_id,
             "author_id": task.author_id,
             "author": task.author,
@@ -788,11 +883,93 @@ def get_actionable_tasks(
             "parent_task_id": task.parent_task_id,
             "comment_count": len(task.comments),
             "created_at": task.created_at,
-            "updated_at": task.updated_at
+            "updated_at": task.updated_at,
+            "due_date": task.due_date,
+            "estimated_hours": float(task.estimated_hours) if task.estimated_hours is not None else None,
+            "actual_hours": float(task.actual_hours) if task.actual_hours is not None else None,
+            "is_blocked": is_blocked_map.get(task.id, False)
         }
         result.append(task_dict)
 
-    logger.critical(f"Successfully retrieved {len(result)} actionable tasks")
+    logger.info(f"Returning {len(result)} overdue tasks out of {total_count} total")
+    return result
+
+
+@app.get("/api/tasks/upcoming", response_model=List[schemas.TaskSummary])
+def get_upcoming_tasks(
+    days: int = Query(7, ge=1, le=365, description="Number of days ahead to look for upcoming tasks (default 7)"),
+    project_id: Optional[int] = Query(None),
+    limit: int = Query(10, le=500, description="Limit for pagination (max 500, default 10)"),
+    offset: int = Query(0, ge=0, description="Offset for pagination"),
+    db: Session = Depends(get_db)
+):
+    """
+    Query upcoming tasks (due_date between now and now + days, excludes done and backlog).
+    Returns actionable tasks that are due within the specified number of days.
+    Backlog tasks are excluded as they are not yet actionable.
+    """
+    logger.debug(f"Getting upcoming tasks with filters: days={days}, project_id={project_id}, limit={limit}, offset={offset}")
+
+    # Calculate date range using timezone-aware datetime (single time source)
+    now = utc_now()
+    future_date = now + timedelta(days=days)
+
+    # Query upcoming tasks
+    query = db.query(models.Task)\
+        .options(
+            joinedload(models.Task.author),
+            joinedload(models.Task.owner),
+            joinedload(models.Task.comments)
+        )\
+        .filter(
+            models.Task.due_date >= now,
+            models.Task.due_date <= future_date,
+            models.Task.status.notin_([models.TaskStatus.done, models.TaskStatus.backlog])
+        )
+
+    # Apply project filter if provided
+    if project_id:
+        query = query.filter(models.Task.project_id == project_id)
+
+    # Get total count before pagination
+    total_count = query.count()
+    logger.debug(f"Found {total_count} upcoming tasks before pagination")
+
+    # Apply pagination
+    query = query.order_by(models.Task.due_date).offset(offset).limit(limit)
+    tasks = query.all()
+
+    # Bulk calculate is_blocked for all tasks to avoid N+1 queries
+    task_ids = [task.id for task in tasks]
+    is_blocked_map = bulk_calculate_is_blocked(db, task_ids)
+
+    # Convert to summary format with comment_count
+    result = []
+    for task in tasks:
+        task_dict = {
+            "id": task.id,
+            "title": task.title,
+            "description": task.description,
+            "tag": task.tag,
+            "priority": task.priority,
+            "status": task.status,
+            "project_id": task.project_id,
+            "author_id": task.author_id,
+            "author": task.author,
+            "owner_id": task.owner_id,
+            "owner": task.owner,
+            "parent_task_id": task.parent_task_id,
+            "comment_count": len(task.comments),
+            "created_at": task.created_at,
+            "updated_at": task.updated_at,
+            "due_date": task.due_date,
+            "estimated_hours": float(task.estimated_hours) if task.estimated_hours is not None else None,
+            "actual_hours": float(task.actual_hours) if task.actual_hours is not None else None,
+            "is_blocked": is_blocked_map.get(task.id, False)
+        }
+        result.append(task_dict)
+
+    logger.info(f"Returning {len(result)} upcoming tasks out of {total_count} total (next {days} days)")
     return result
 
 
@@ -867,7 +1044,10 @@ def get_task_subtasks(task_id: int, db: Session = Depends(get_db)):
             "comment_count": len(subtask.comments),
             "is_blocked": is_blocked,
             "created_at": subtask.created_at,
-            "updated_at": subtask.updated_at
+            "updated_at": subtask.updated_at,
+            "due_date": subtask.due_date,
+            "estimated_hours": subtask.estimated_hours,
+            "actual_hours": subtask.actual_hours
         }
         result.append(task_dict)
 

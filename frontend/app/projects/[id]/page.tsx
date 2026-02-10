@@ -29,6 +29,7 @@ import {
   Task,
   Author
 } from '@/lib/api';
+import { localInputToUTC } from '@/lib/date-utils';
 
 export default function ProjectDetail() {
   const params = useParams();
@@ -50,6 +51,8 @@ export default function ProjectDetail() {
   const [newTag, setNewTag] = useState<'bug' | 'feature' | 'idea'>('feature');
   const [newPriority, setNewPriority] = useState<'P0' | 'P1'>('P1');
   const [newAuthorId, setNewAuthorId] = useState<number | undefined>();
+  const [newDueDate, setNewDueDate] = useState('');
+  const [newEstimatedHours, setNewEstimatedHours] = useState('');
 
   useEffect(() => {
     loadProject();
@@ -120,13 +123,17 @@ export default function ProjectDetail() {
         description: newDescription.trim() || undefined,
         tag: newTag,
         priority: newPriority,
-        author_id: newAuthorId
+        author_id: newAuthorId,
+        due_date: newDueDate ? localInputToUTC(newDueDate) : undefined,
+        estimated_hours: newEstimatedHours !== '' ? parseFloat(newEstimatedHours) : undefined
       });
       setNewTitle('');
       setNewDescription('');
       setNewTag('feature');
       setNewPriority('P1');
       setNewAuthorId(undefined);
+      setNewDueDate('');
+      setNewEstimatedHours('');
       setShowNewTask(false);
       loadProject();
     } catch (error) {
@@ -395,6 +402,34 @@ export default function ProjectDetail() {
                 rows={2}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
               />
+            </div>
+            {/* Time Tracking Fields */}
+            <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Due Date
+                </label>
+                <input
+                  type="datetime-local"
+                  value={newDueDate}
+                  onChange={(e) => setNewDueDate(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Estimated Hours
+                </label>
+                <input
+                  type="number"
+                  step="0.25"
+                  min="0"
+                  value={newEstimatedHours}
+                  onChange={(e) => setNewEstimatedHours(e.target.value)}
+                  placeholder="5.5"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
             </div>
             <div className="mt-4 flex gap-2">
               <button
