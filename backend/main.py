@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, Query, UploadFile, File, Request
+from fastapi import FastAPI, HTTPException, Depends, Query, UploadFile, File, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session, joinedload
@@ -16,6 +16,14 @@ from database import get_db, engine, Base
 import models
 import schemas
 from time_utils import utc_now
+from auth.routes import router as auth_router
+from auth.dependencies import get_current_user, get_current_admin, require_role
+from auth.permissions import (
+    check_project_permission,
+    has_project_access,
+    require_project_permission,
+    get_user_projects,
+)
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -38,6 +46,126 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Register authentication router
+app.include_router(auth_router)
+
+
+# ============== Startup: Ensure Admin User Exists ==============
+
+@app.on_event("startup")
+async def ensure_admin_user():
+    """
+    Ensure admin user exists on startup.
+
+    Uses ADMIN_PASSWORD env var if set, otherwise defaults to 'admin123' for local dev.
+    Logs a warning if using default password in production.
+    """
+    from database import SessionLocal
+    from auth.security import hash_password, is_production_like
+
+    db = SessionLocal()
+    try:
+        # Check if admin user already exists
+        admin = db.query(models.User).filter(models.User.email == "admin@example.com").first()
+
+        if admin:
+            logger.info("Admin user already exists (email: admin@example.com)")
+            return
+
+        # Get password from env var or use default for local dev
+        admin_password = os.getenv("ADMIN_PASSWORD", "admin123")
+        is_default_password = admin_password.strip() == "admin123"
+
+        # Security: Validate password strength in production-like environments
+        if is_production_like():
+            # Treat empty, whitespace-only, or default passwords as invalid
+            if not admin_password or not admin_password.strip() or admin_password == "admin123":
+                logger.error(
+                    "=" * 80 + "\n"
+                    "❌ STARTUP FAILED: Secure ADMIN_PASSWORD is required in production/staging!\n"
+                    "❌ Password must:\n"
+                    "❌   - Not be empty or whitespace\n"
+                    "❌   - Not be the default 'admin123'\n"
+                    "❌   - Be at least 8 characters long\n"
+                    "❌ Example: ADMIN_PASSWORD=$(openssl rand -base64 32)\n" +
+                    "=" * 80
+                )
+                import sys
+                sys.exit(1)
+
+            # Enforce minimum password length
+            if len(admin_password.strip()) < 8:
+                logger.error(
+                    "=" * 80 + "\n"
+                    "❌ STARTUP FAILED: ADMIN_PASSWORD must be at least 8 characters long!\n"
+                    "❌ Current length: %d characters\n" % len(admin_password.strip()) +
+                    "❌ Example: ADMIN_PASSWORD=$(openssl rand -base64 32)\n" +
+                    "=" * 80
+                )
+                import sys
+                sys.exit(1)
+
+        # Create admin user
+        password_hash = hash_password(admin_password)
+        admin = models.User(
+            name="Admin",
+            email="admin@example.com",
+            role="admin",
+            password_hash=password_hash,
+            is_active=True
+        )
+        db.add(admin)
+        db.commit()
+        db.refresh(admin)
+
+        # Log success with security warning if using default
+        if is_default_password:
+            logger.warning(
+                "=" * 80 + "\n"
+                "⚠️  SECURITY WARNING: Admin user created with DEFAULT password 'admin123'\n"
+                "⚠️  This is OK for local development but DANGEROUS for production!\n"
+                "⚠️  Set ADMIN_PASSWORD environment variable to use a custom password.\n"
+                "⚠️  Login at: http://localhost:6001/login (admin@example.com / admin123)\n"
+                "⚠️  CHANGE PASSWORD IMMEDIATELY after first login!\n" +
+                "=" * 80
+            )
+        else:
+            logger.info(
+                f"✅ Admin user created successfully with custom password from ADMIN_PASSWORD env var\n"
+                f"   Login: admin@example.com / <custom-password>"
+            )
+
+        # Create sample project if it doesn't exist (for demo purposes)
+        sample_project = db.query(models.Project).filter(models.Project.name == "Sample Project").first()
+        if not sample_project:
+            sample_project = models.Project(
+                name="Sample Project",
+                description="A sample project to get started",
+                author_id=admin.id
+            )
+            db.add(sample_project)
+            db.commit()
+            db.refresh(sample_project)
+
+            # Add admin as project owner
+            project_member = models.ProjectMember(
+                project_id=sample_project.id,
+                user_id=admin.id,
+                role="owner"
+            )
+            db.add(project_member)
+            db.commit()
+
+            logger.info(f"✅ Sample project created (ID: {sample_project.id})")
+
+    except Exception as e:
+        logger.error(f"Failed to ensure admin user exists: {e}")
+        db.rollback()
+        # Don't fail startup - let the app run even if admin creation fails
+    finally:
+        db.close()
+
 
 # Note: Backend now runs on port 6001 (mapped from internal port 8000)
 
@@ -185,78 +313,247 @@ def health_check():
 
 # ============== Authors ==============
 
-@app.get("/api/authors", response_model=List[schemas.Author])
-def list_authors(db: Session = Depends(get_db)):
-    return db.query(models.Author).all()
+# ============== Users ==============
+
+@app.get("/api/users", response_model=List[schemas.User])
+def list_users(
+    current_user: models.User = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    """List all users (admin only)."""
+    logger.debug(f"Admin {current_user.id} listing all users")
+    return db.query(models.User).all()
 
 
-@app.post("/api/authors", response_model=schemas.Author)
-def create_author(author: schemas.AuthorCreate, db: Session = Depends(get_db)):
+@app.post("/api/users", response_model=schemas.User)
+def create_user(
+    user_data: schemas.UserCreate,
+    current_user: models.User = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    """Create a new user (admin only)."""
+    logger.debug(f"Admin {current_user.id} creating user: {user_data.email}")
+
     # Check if email already exists
-    existing = db.query(models.Author).filter(models.Author.email == author.email).first()
+    existing = db.query(models.User).filter(models.User.email == user_data.email).first()
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    db_author = models.Author(**author.model_dump())
-    db.add(db_author)
+    # Import here to avoid circular dependency
+    from auth.security import hash_password
+
+    user_dict = user_data.model_dump(exclude={"password"})
+    user_dict["password_hash"] = hash_password(user_data.password)
+
+    db_user = models.User(**user_dict)
+    db.add(db_user)
     db.commit()
-    db.refresh(db_author)
-    return db_author
+    db.refresh(db_user)
+
+    logger.info(f"User created: {db_user.email} (ID: {db_user.id})")
+    return db_user
 
 
-@app.get("/api/authors/{author_id}", response_model=schemas.Author)
-def get_author(author_id: int, db: Session = Depends(get_db)):
-    author = db.query(models.Author).filter(models.Author.id == author_id).first()
-    if not author:
-        raise HTTPException(status_code=404, detail="Author not found")
-    return author
+@app.get("/api/users/{user_id}", response_model=schemas.User)
+def get_user(
+    user_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get user by ID (admin or self)."""
+    logger.debug(f"User {current_user.id} requesting user {user_id}")
+
+    # Allow admins to view any user, or users to view themselves
+    if current_user.role != "admin" and current_user.id != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied. You can only view your own profile."
+        )
+
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
 
 
-@app.put("/api/authors/{author_id}", response_model=schemas.Author)
-def update_author(author_id: int, author_update: schemas.AuthorUpdate, db: Session = Depends(get_db)):
-    author = db.query(models.Author).filter(models.Author.id == author_id).first()
-    if not author:
-        raise HTTPException(status_code=404, detail="Author not found")
+@app.put("/api/users/{user_id}", response_model=schemas.User)
+def update_user(
+    user_id: int,
+    user_update: schemas.UserUpdate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update user (admin or self). Only admins can change role/is_active."""
+    logger.debug(f"User {current_user.id} updating user {user_id}")
 
-    update_data = author_update.model_dump(exclude_unset=True)
+    # Allow admins to update any user, or users to update themselves
+    if current_user.role != "admin" and current_user.id != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied. You can only update your own profile."
+        )
+
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    update_data = user_update.model_dump(exclude_unset=True)
+
+    # Only admins can change role and is_active
+    if current_user.role != "admin":
+        update_data.pop("role", None)
+        update_data.pop("is_active", None)
+
+    # Security: Reject null role updates (DB column is non-nullable)
+    # This prevents 500 errors and provides clear 400 validation error
+    if "role" in update_data and update_data["role"] is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Role cannot be null. Valid values: admin, editor, viewer"
+        )
+
+    # Validate email uniqueness before attempting update
+    if "email" in update_data and update_data["email"] != user.email:
+        existing_user = db.query(models.User).filter(
+            models.User.email == update_data["email"],
+            models.User.id != user_id
+        ).first()
+        if existing_user:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Email '{update_data['email']}' is already in use"
+            )
+
     for key, value in update_data.items():
-        setattr(author, key, value)
+        setattr(user, key, value)
 
+    try:
+        db.commit()
+        db.refresh(user)
+    except Exception as e:
+        db.rollback()
+        # Catch any remaining integrity errors (defensive)
+        if "unique constraint" in str(e).lower() or "duplicate key" in str(e).lower():
+            raise HTTPException(
+                status_code=400,
+                detail="Email is already in use by another user"
+            )
+        raise HTTPException(status_code=500, detail="Failed to update user")
+
+    logger.info(f"User updated: {user.email} (ID: {user.id})")
+    return user
+
+
+@app.delete("/api/users/{user_id}")
+def delete_user(
+    user_id: int,
+    current_user: models.User = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    """Delete user (admin only)."""
+    logger.debug(f"Admin {current_user.id} deleting user {user_id}")
+
+    # Guard 1: Prevent self-deletion (admin locking themselves out)
+    if user_id == current_user.id:
+        logger.warning(f"Admin {current_user.id} attempted to delete their own account")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot delete your own account. Ask another admin to remove your account."
+        )
+
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Guard 2: Prevent deleting the last admin (system lockout)
+    if user.role == "admin":
+        admin_count = db.query(models.User).filter(
+            models.User.role == "admin",
+            models.User.is_active == True
+        ).count()
+
+        if admin_count <= 1:
+            logger.warning(f"Admin {current_user.id} attempted to delete the last admin user {user_id}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot delete the last admin user. Promote another user to admin first."
+            )
+
+    db.delete(user)
     db.commit()
-    db.refresh(author)
-    return author
 
-
-@app.delete("/api/authors/{author_id}")
-def delete_author(author_id: int, db: Session = Depends(get_db)):
-    author = db.query(models.Author).filter(models.Author.id == author_id).first()
-    if not author:
-        raise HTTPException(status_code=404, detail="Author not found")
-
-    db.delete(author)
-    db.commit()
-    return {"message": "Author deleted"}
+    logger.info(f"User deleted: {user.email} (ID: {user_id})")
+    return {"message": "User deleted"}
 
 
 # ============== Projects ==============
 
 @app.get("/api/projects", response_model=List[schemas.Project])
-def list_projects(db: Session = Depends(get_db)):
-    projects = db.query(models.Project).options(joinedload(models.Project.author)).all()
+def list_projects(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """List all projects accessible to the current user."""
+    logger.debug(f"User {current_user.id} listing projects")
+
+    # Get projects user has access to
+    project_ids = get_user_projects(current_user, db)
+
+    projects = (
+        db.query(models.Project)
+        .filter(models.Project.id.in_(project_ids))
+        .options(joinedload(models.Project.author))
+        .all()
+    )
+
+    logger.info(f"User {current_user.id} retrieved {len(projects)} projects")
     return projects
 
 
 @app.post("/api/projects", response_model=schemas.Project)
-def create_project(project: schemas.ProjectCreate, db: Session = Depends(get_db)):
-    db_project = models.Project(**project.model_dump())
+def create_project(
+    project: schemas.ProjectCreate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Create a new project and add creator as owner."""
+    logger.debug(f"User {current_user.id} creating project: {project.name}")
+
+    # Create project with current user as author (ignore any client-provided author_id)
+    project_data = project.model_dump()
+    project_data["author_id"] = current_user.id  # Always use authenticated user
+
+    db_project = models.Project(**project_data)
     db.add(db_project)
+    db.flush()  # Get project ID without committing
+
+    # Add creator as project owner
+    membership = models.ProjectMember(
+        project_id=db_project.id,
+        user_id=current_user.id,
+        role="owner"
+    )
+    db.add(membership)
+
     db.commit()
     db.refresh(db_project)
+
+    logger.info(f"Project created: {db_project.name} (ID: {db_project.id}) by user {current_user.id}")
     return db_project
 
 
 @app.get("/api/projects/{project_id}", response_model=schemas.ProjectWithTasks)
-def get_project(project_id: int, db: Session = Depends(get_db)):
+def get_project(
+    project_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get project with all tasks (requires viewer access)."""
+    logger.debug(f"User {current_user.id} requesting project {project_id}")
+
+    # Check if user has access to this project
+    require_project_permission(current_user, project_id, "viewer", db)
+
     project = db.query(models.Project)\
         .options(
             joinedload(models.Project.author),
@@ -297,7 +594,17 @@ def get_project(project_id: int, db: Session = Depends(get_db)):
 
 
 @app.get("/api/projects/{project_id}/stats", response_model=schemas.ProjectStats)
-def get_project_stats(project_id: int, db: Session = Depends(get_db)):
+def get_project_stats(
+    project_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get project statistics (requires viewer access)."""
+    logger.debug(f"User {current_user.id} requesting stats for project {project_id}")
+
+    # Check if user has access to this project
+    require_project_permission(current_user, project_id, "viewer", db)
+
     project = db.query(models.Project).filter(models.Project.id == project_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -323,7 +630,18 @@ def get_project_stats(project_id: int, db: Session = Depends(get_db)):
 
 
 @app.put("/api/projects/{project_id}", response_model=schemas.Project)
-def update_project(project_id: int, project_update: schemas.ProjectUpdate, db: Session = Depends(get_db)):
+def update_project(
+    project_id: int,
+    project_update: schemas.ProjectUpdate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update project (requires owner/admin role)."""
+    logger.debug(f"User {current_user.id} updating project {project_id}")
+
+    # Check if user has owner/admin permission
+    require_project_permission(current_user, project_id, "owner", db)
+
     project = db.query(models.Project).filter(models.Project.id == project_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -334,18 +652,195 @@ def update_project(project_id: int, project_update: schemas.ProjectUpdate, db: S
 
     db.commit()
     db.refresh(project)
+
+    logger.info(f"Project updated: {project.name} (ID: {project_id})")
     return project
 
 
 @app.delete("/api/projects/{project_id}")
-def delete_project(project_id: int, db: Session = Depends(get_db)):
+def delete_project(
+    project_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Delete project (requires owner/admin role)."""
+    logger.debug(f"User {current_user.id} deleting project {project_id}")
+
+    # Check if user has owner/admin permission
+    require_project_permission(current_user, project_id, "owner", db)
+
     project = db.query(models.Project).filter(models.Project.id == project_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
     db.delete(project)
     db.commit()
+
+    logger.info(f"Project deleted: {project.name} (ID: {project_id})")
     return {"message": "Project deleted"}
+
+
+@app.get("/api/projects/{project_id}/kanban-settings", response_model=schemas.KanbanSettings)
+def get_kanban_settings(
+    project_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get Kanban board settings for a project (requires viewer access)."""
+    logger.debug(f"User {current_user.id} fetching kanban settings for project_id={project_id}")
+
+    # Check if user has access to this project
+    require_project_permission(current_user, project_id, "viewer", db)
+
+    project = db.query(models.Project).filter(models.Project.id == project_id).first()
+    if not project:
+        logger.info(f"Project not found: project_id={project_id}")
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    settings = project.kanban_settings or {}
+    logger.debug(f"Retrieved kanban settings: {settings}")
+    logger.critical(f"Successfully retrieved kanban settings for project_id={project_id}")
+
+    return schemas.KanbanSettings(**settings)
+
+
+@app.put("/api/projects/{project_id}/kanban-settings", response_model=schemas.KanbanSettings)
+def update_kanban_settings(
+    project_id: int,
+    settings: schemas.KanbanSettings,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update Kanban board settings for a project (requires editor access)."""
+    logger.debug(f"User {current_user.id} updating kanban settings for project_id={project_id}, settings={settings.dict()}")
+
+    # Check if user has editor permission
+    require_project_permission(current_user, project_id, "editor", db)
+
+    project = db.query(models.Project).filter(models.Project.id == project_id).first()
+    if not project:
+        logger.info(f"Project not found: project_id={project_id}")
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    project.kanban_settings = settings.dict()
+    db.commit()
+    db.refresh(project)
+
+    logger.debug(f"Updated kanban settings: {project.kanban_settings}")
+    logger.critical(f"Successfully updated kanban settings for project_id={project_id}")
+
+    return schemas.KanbanSettings(**project.kanban_settings)
+
+
+# ============== Project Members ==============
+
+@app.post("/api/projects/{project_id}/members", response_model=schemas.ProjectMemberResponse)
+def add_project_member(
+    project_id: int,
+    member_data: schemas.ProjectMemberCreate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Add a member to a project (requires owner/admin role)."""
+    logger.debug(f"User {current_user.id} adding member {member_data.user_id} to project {project_id}")
+
+    # Check if user has owner/admin permission
+    require_project_permission(current_user, project_id, "owner", db)
+
+    # Check if user to add exists
+    user_to_add = db.query(models.User).filter(models.User.id == member_data.user_id).first()
+    if not user_to_add:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Check if membership already exists
+    existing = db.query(models.ProjectMember).filter(
+        models.ProjectMember.project_id == project_id,
+        models.ProjectMember.user_id == member_data.user_id
+    ).first()
+
+    if existing:
+        raise HTTPException(status_code=400, detail="User is already a member of this project")
+
+    # Create membership
+    membership = models.ProjectMember(
+        project_id=project_id,
+        user_id=member_data.user_id,
+        role=member_data.role
+    )
+    db.add(membership)
+    db.commit()
+    db.refresh(membership)
+
+    # Load user relationship
+    membership.user = user_to_add
+
+    logger.info(f"User {member_data.user_id} added to project {project_id} with role {member_data.role}")
+    return membership
+
+
+@app.get("/api/projects/{project_id}/members", response_model=List[schemas.ProjectMemberResponse])
+def list_project_members(
+    project_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """List all members of a project (requires viewer access)."""
+    logger.debug(f"User {current_user.id} listing members of project {project_id}")
+
+    # Check if user has access to this project
+    require_project_permission(current_user, project_id, "viewer", db)
+
+    members = (
+        db.query(models.ProjectMember)
+        .filter(models.ProjectMember.project_id == project_id)
+        .options(joinedload(models.ProjectMember.user))
+        .all()
+    )
+
+    logger.info(f"Retrieved {len(members)} members for project {project_id}")
+    return members
+
+
+@app.delete("/api/projects/{project_id}/members/{user_id}")
+def remove_project_member(
+    project_id: int,
+    user_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Remove a member from a project (requires owner/admin role)."""
+    logger.debug(f"User {current_user.id} removing member {user_id} from project {project_id}")
+
+    # Check if user has owner/admin permission
+    require_project_permission(current_user, project_id, "owner", db)
+
+    # Find membership
+    membership = db.query(models.ProjectMember).filter(
+        models.ProjectMember.project_id == project_id,
+        models.ProjectMember.user_id == user_id
+    ).first()
+
+    if not membership:
+        raise HTTPException(status_code=404, detail="Membership not found")
+
+    # Prevent removing the last owner
+    if membership.role == "owner":
+        owner_count = db.query(models.ProjectMember).filter(
+            models.ProjectMember.project_id == project_id,
+            models.ProjectMember.role == "owner"
+        ).count()
+
+        if owner_count <= 1:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot remove the last owner from the project"
+            )
+
+    db.delete(membership)
+    db.commit()
+
+    logger.info(f"User {user_id} removed from project {project_id}")
+    return {"message": "Member removed from project"}
 
 
 # ============== Helper Functions ==============
@@ -635,6 +1130,7 @@ def bulk_calculate_is_blocked(db: Session, task_ids: list[int], batch_done_task_
 
 @app.get("/api/tasks", response_model=List[schemas.TaskSummary])
 def list_tasks(
+    current_user: models.User = Depends(get_current_user),
     project_id: Optional[int] = Query(None),
     status: Optional[schemas.TaskStatus] = Query(None),
     priority: Optional[schemas.TaskPriority] = Query(None),
@@ -649,7 +1145,11 @@ def list_tasks(
     offset: int = Query(0, ge=0, description="Offset for pagination (only used with limit)"),
     db: Session = Depends(get_db)
 ):
-    logger.debug(f"list_tasks called with q={q}, sort_by={sort_by}, filters: project={project_id}, status={status}, priority={priority}, tag={tag}, owner={owner_id}, due_before={due_before}, due_after={due_after}, overdue={overdue}")
+    """List tasks (filtered by user's accessible projects)."""
+    logger.debug(f"User {current_user.id} listing tasks: q={q}, sort_by={sort_by}, filters: project={project_id}, status={status}, priority={priority}, tag={tag}, owner={owner_id}, due_before={due_before}, due_after={due_after}, overdue={overdue}")
+
+    # Get user's accessible projects
+    accessible_project_ids = get_user_projects(current_user, db)
 
     # Base query with eager loading
     query = db.query(models.Task).options(
@@ -658,8 +1158,14 @@ def list_tasks(
         joinedload(models.Task.comments)
     )
 
+    # Filter by accessible projects
+    query = query.filter(models.Task.project_id.in_(accessible_project_ids))
+
     # Apply filters
     if project_id:
+        # Verify user has access to this specific project
+        if project_id not in accessible_project_ids:
+            raise HTTPException(status_code=403, detail="Access denied to this project")
         query = query.filter(models.Task.project_id == project_id)
     if status:
         query = query.filter(models.Task.status == status)
@@ -792,10 +1298,18 @@ def list_tasks(
 
 
 @app.post("/api/tasks", response_model=schemas.Task)
-def create_task(task: schemas.TaskCreate, db: Session = Depends(get_db)):
-    logger.info(f"Creating task: {task.title} in project {task.project_id}")
+def create_task(
+    task: schemas.TaskCreate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Create a new task (requires editor access to project)."""
+    logger.info(f"User {current_user.id} creating task: {task.title} in project {task.project_id}")
 
-    # Verify project exists
+    # Check if user has editor permission for this project
+    require_project_permission(current_user, task.project_id, "editor", db)
+
+    # Verify project exists (should pass since require_project_permission already checked)
     project = db.query(models.Project).filter(models.Project.id == task.project_id).first()
     if not project:
         logger.critical(f"Project {task.project_id} not found")
@@ -824,17 +1338,38 @@ def create_task(task: schemas.TaskCreate, db: Session = Depends(get_db)):
             )
         logger.debug(f"Parent task validation successful")
 
-    db_task = models.Task(**task.model_dump())
+    # Validate owner_id if provided
+    if task.owner_id is not None:
+        logger.debug(f"Validating owner {task.owner_id}")
+        owner = db.query(models.User).filter(models.User.id == task.owner_id).first()
+        if not owner:
+            logger.info(f"Owner {task.owner_id} not found")
+            raise HTTPException(status_code=404, detail=f"Owner with ID {task.owner_id} not found")
+
+        # Validate owner has access to the project
+        if not has_project_access(owner, task.project_id, db):
+            logger.info(f"Owner {task.owner_id} is not a member of project {task.project_id}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot assign task to user {owner.email}: user is not a member of this project"
+            )
+        logger.debug(f"Owner validation successful (user is project member)")
+
+    # SECURITY: Always use current_user.id, never trust author_id from request
+    task_data = task.model_dump()
+    task_data['author_id'] = current_user.id  # Force current user as author
+
+    db_task = models.Task(**task_data)
     db.add(db_task)
     db.commit()
     db.refresh(db_task)
 
-    # Create task_created event
+    # Create task_created event (use current_user.id for actor)
     create_task_event(
         db=db,
         task_id=db_task.id,
         event_type=models.TaskEventType.task_created,
-        actor_id=task.author_id,
+        actor_id=current_user.id,  # SECURITY: Use authenticated user, not request data
         metadata={
             "title": db_task.title,
             "status": db_task.status.value,
@@ -849,6 +1384,7 @@ def create_task(task: schemas.TaskCreate, db: Session = Depends(get_db)):
 
 @app.get("/api/tasks/actionable", response_model=List[schemas.TaskSummary])
 def get_actionable_tasks(
+    current_user: models.User = Depends(get_current_user),
     project_id: Optional[int] = Query(None),
     owner_id: Optional[int] = Query(None),
     priority: Optional[schemas.TaskPriority] = Query(None),
@@ -858,11 +1394,14 @@ def get_actionable_tasks(
     db: Session = Depends(get_db)
 ):
     """
-    Query unblocked, actionable tasks.
+    Query unblocked, actionable tasks (filtered by user's accessible projects).
     Returns tasks that are not in backlog, blocked, or done status and have no blocking dependencies
     or all blocking tasks are completed.
     """
-    logger.debug(f"Getting actionable tasks with filters: project_id={project_id}, owner_id={owner_id}, priority={priority}, tag={tag}")
+    logger.debug(f"User {current_user.id} getting actionable tasks with filters: project_id={project_id}, owner_id={owner_id}, priority={priority}, tag={tag}")
+
+    # Get user's accessible projects
+    accessible_project_ids = get_user_projects(current_user, db)
 
     # Start with tasks excluding backlog, blocked, and done
     query = db.query(models.Task)\
@@ -871,7 +1410,9 @@ def get_actionable_tasks(
             joinedload(models.Task.owner),
             joinedload(models.Task.comments)
         )\
-        .filter(models.Task.status.notin_([
+        .filter(
+            models.Task.project_id.in_(accessible_project_ids),
+            models.Task.status.notin_([
             models.TaskStatus.backlog,
             models.TaskStatus.blocked,
             models.TaskStatus.done
@@ -969,17 +1510,21 @@ def get_actionable_tasks(
 
 @app.get("/api/tasks/overdue", response_model=List[schemas.TaskSummary])
 def get_overdue_tasks(
+    current_user: models.User = Depends(get_current_user),
     project_id: Optional[int] = Query(None),
     limit: int = Query(10, le=500, description="Limit for pagination (max 500, default 10)"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     db: Session = Depends(get_db)
 ):
     """
-    Query overdue tasks (due_date < now, excludes done and backlog).
+    Query overdue tasks (filtered by user's accessible projects).
     Returns actionable tasks that are past their due date.
     Backlog tasks are excluded as they are not yet actionable.
     """
-    logger.debug(f"Getting overdue tasks with filters: project_id={project_id}, limit={limit}, offset={offset}")
+    logger.debug(f"User {current_user.id} getting overdue tasks with filters: project_id={project_id}, limit={limit}, offset={offset}")
+
+    # Get user's accessible projects
+    accessible_project_ids = get_user_projects(current_user, db)
 
     # Calculate current time using timezone-aware datetime (consistent with upcoming endpoint)
     now = utc_now()
@@ -992,12 +1537,15 @@ def get_overdue_tasks(
             joinedload(models.Task.comments)
         )\
         .filter(
+            models.Task.project_id.in_(accessible_project_ids),
             models.Task.due_date < now,
             models.Task.status.notin_([models.TaskStatus.done, models.TaskStatus.backlog])
         )
 
     # Apply project filter if provided
     if project_id:
+        if project_id not in accessible_project_ids:
+            raise HTTPException(status_code=403, detail="Access denied to this project")
         query = query.filter(models.Task.project_id == project_id)
 
     # Get total count before pagination
@@ -1044,6 +1592,7 @@ def get_overdue_tasks(
 
 @app.get("/api/tasks/upcoming", response_model=List[schemas.TaskSummary])
 def get_upcoming_tasks(
+    current_user: models.User = Depends(get_current_user),
     days: int = Query(7, ge=1, le=365, description="Number of days ahead to look for upcoming tasks (default 7)"),
     project_id: Optional[int] = Query(None),
     limit: int = Query(10, le=500, description="Limit for pagination (max 500, default 10)"),
@@ -1051,11 +1600,14 @@ def get_upcoming_tasks(
     db: Session = Depends(get_db)
 ):
     """
-    Query upcoming tasks (due_date between now and now + days, excludes done and backlog).
+    Query upcoming tasks (filtered by user's accessible projects).
     Returns actionable tasks that are due within the specified number of days.
     Backlog tasks are excluded as they are not yet actionable.
     """
-    logger.debug(f"Getting upcoming tasks with filters: days={days}, project_id={project_id}, limit={limit}, offset={offset}")
+    logger.debug(f"User {current_user.id} getting upcoming tasks with filters: days={days}, project_id={project_id}, limit={limit}, offset={offset}")
+
+    # Get user's accessible projects
+    accessible_project_ids = get_user_projects(current_user, db)
 
     # Calculate date range using timezone-aware datetime (single time source)
     now = utc_now()
@@ -1069,6 +1621,7 @@ def get_upcoming_tasks(
             joinedload(models.Task.comments)
         )\
         .filter(
+            models.Task.project_id.in_(accessible_project_ids),
             models.Task.due_date >= now,
             models.Task.due_date <= future_date,
             models.Task.status.notin_([models.TaskStatus.done, models.TaskStatus.backlog])
@@ -1076,6 +1629,8 @@ def get_upcoming_tasks(
 
     # Apply project filter if provided
     if project_id:
+        if project_id not in accessible_project_ids:
+            raise HTTPException(status_code=403, detail="Access denied to this project")
         query = query.filter(models.Task.project_id == project_id)
 
     # Get total count before pagination
@@ -1121,7 +1676,14 @@ def get_upcoming_tasks(
 
 
 @app.get("/api/tasks/{task_id}", response_model=schemas.Task)
-def get_task(task_id: int, db: Session = Depends(get_db)):
+def get_task(
+    task_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get task by ID (requires viewer access to project)."""
+    logger.debug(f"User {current_user.id} requesting task {task_id}")
+
     task = db.query(models.Task)\
         .options(
             joinedload(models.Task.author),
@@ -1134,6 +1696,9 @@ def get_task(task_id: int, db: Session = Depends(get_db)):
 
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+
+    # Check if user has access to this task's project
+    require_project_permission(current_user, task.project_id, "viewer", db)
 
     # Calculate is_blocked field
     is_blocked = calculate_is_blocked(db, task_id)
@@ -1148,15 +1713,22 @@ def get_task(task_id: int, db: Session = Depends(get_db)):
 
 
 @app.get("/api/tasks/{task_id}/subtasks", response_model=List[schemas.TaskSummary])
-def get_task_subtasks(task_id: int, db: Session = Depends(get_db)):
-    """Get all subtasks of a task."""
-    logger.info(f"Fetching subtasks for task {task_id}")
+def get_task_subtasks(
+    task_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get all subtasks of a task (requires viewer access)."""
+    logger.info(f"User {current_user.id} fetching subtasks for task {task_id}")
 
     # Verify parent task exists
     task = db.query(models.Task).filter(models.Task.id == task_id).first()
     if not task:
         logger.critical(f"Task {task_id} not found")
         raise HTTPException(status_code=404, detail="Task not found")
+
+    # Check if user has access to this task's project
+    require_project_permission(current_user, task.project_id, "viewer", db)
 
     # Get all subtasks
     subtasks = db.query(models.Task)\
@@ -1203,15 +1775,22 @@ def get_task_subtasks(task_id: int, db: Session = Depends(get_db)):
 
 
 @app.get("/api/tasks/{task_id}/progress", response_model=schemas.TaskProgress)
-def get_task_progress(task_id: int, db: Session = Depends(get_db)):
-    """Get completion percentage based on subtasks."""
-    logger.info(f"Calculating progress for task {task_id}")
+def get_task_progress(
+    task_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get completion percentage based on subtasks (requires viewer access)."""
+    logger.info(f"User {current_user.id} calculating progress for task {task_id}")
 
     # Verify task exists
     task = db.query(models.Task).filter(models.Task.id == task_id).first()
     if not task:
         logger.critical(f"Task {task_id} not found")
         raise HTTPException(status_code=404, detail="Task not found")
+
+    # Check project permission (viewer or higher required)
+    require_project_permission(current_user, task.project_id, "viewer", db)
 
     # Get all subtasks
     subtasks = db.query(models.Task).filter(models.Task.parent_task_id == task_id).all()
@@ -1232,12 +1811,22 @@ def get_task_progress(task_id: int, db: Session = Depends(get_db)):
 
 
 @app.put("/api/tasks/{task_id}", response_model=schemas.Task)
-def update_task(task_id: int, task_update: schemas.TaskUpdate, db: Session = Depends(get_db)):
-    logger.info(f"Updating task {task_id}")
+def update_task(
+    task_id: int,
+    task_update: schemas.TaskUpdate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update task (requires editor access to project)."""
+    logger.info(f"User {current_user.id} updating task {task_id}")
+
     task = db.query(models.Task).filter(models.Task.id == task_id).first()
     if not task:
         logger.critical(f"Task {task_id} not found")
         raise HTTPException(status_code=404, detail="Task not found")
+
+    # Check if user has editor permission for this task's project
+    require_project_permission(current_user, task.project_id, "editor", db)
 
     update_data = task_update.model_dump(exclude_unset=True)
 
@@ -1297,6 +1886,23 @@ def update_task(task_id: int, task_update: schemas.TaskUpdate, db: Session = Dep
             )
         logger.debug(f"Parent task validation successful")
 
+    # Validate owner_id if being changed
+    if 'owner_id' in update_data and update_data['owner_id'] is not None:
+        logger.debug(f"Validating owner {update_data['owner_id']}")
+        owner = db.query(models.User).filter(models.User.id == update_data['owner_id']).first()
+        if not owner:
+            logger.info(f"Owner {update_data['owner_id']} not found")
+            raise HTTPException(status_code=404, detail=f"Owner with ID {update_data['owner_id']} not found")
+
+        # Validate owner has access to the task's project
+        if not has_project_access(owner, task.project_id, db):
+            logger.info(f"Owner {update_data['owner_id']} is not a member of project {task.project_id}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot assign task to user {owner.email}: user is not a member of this project"
+            )
+        logger.debug(f"Owner validation successful (user is project member)")
+
     # Track old values for event tracking
     old_values = {key: getattr(task, key) for key in update_data.keys()}
 
@@ -1322,7 +1928,7 @@ def update_task(task_id: int, task_update: schemas.TaskUpdate, db: Session = Dep
                     db=db,
                     task_id=task_id,
                     event_type=models.TaskEventType.status_change,
-                    actor_id=None,  # Could be extracted from request context if available
+                    actor_id=current_user.id,
                     field_name='status',
                     old_value=old_str,
                     new_value=new_str
@@ -1333,7 +1939,7 @@ def update_task(task_id: int, task_update: schemas.TaskUpdate, db: Session = Dep
                     db=db,
                     task_id=task_id,
                     event_type=models.TaskEventType.field_update,
-                    actor_id=None,  # Could be extracted from request context if available
+                    actor_id=current_user.id,
                     field_name=field_name,
                     old_value=old_str,
                     new_value=new_str
@@ -1364,16 +1970,26 @@ def update_task(task_id: int, task_update: schemas.TaskUpdate, db: Session = Dep
 
 
 @app.post("/api/tasks/{task_id}/take-ownership", response_model=schemas.Task)
-def take_ownership(task_id: int, ownership: schemas.TakeOwnership, db: Session = Depends(get_db)):
+def take_ownership(
+    task_id: int,
+    ownership: schemas.TakeOwnership,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Take ownership of a task (requires viewer access to project)."""
+    logger.debug(f"User {current_user.id} taking ownership of task {task_id}")
+
     # Get the task
     task = db.query(models.Task).filter(models.Task.id == task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    # Verify author exists
-    author = db.query(models.Author).filter(models.Author.id == ownership.author_id).first()
-    if not author:
-        raise HTTPException(status_code=404, detail="Author not found")
+    # Check if user has access to this task's project
+    # SECURITY: Require "editor" permission - viewers are read-only and cannot modify tasks
+    require_project_permission(current_user, task.project_id, "editor", db)
+
+    # SECURITY: Always assign ownership to current_user
+    # This prevents privilege escalation (users cannot assign tasks to others)
 
     # Check if task already has an owner
     if task.owner_id is not None and not ownership.force:
@@ -1385,18 +2001,18 @@ def take_ownership(task_id: int, ownership: schemas.TakeOwnership, db: Session =
     # Track old owner for event
     old_owner_id = task.owner_id
 
-    # Assign ownership
-    task.owner_id = ownership.author_id
+    # Assign ownership to current user
+    task.owner_id = current_user.id  # SECURITY: Use authenticated user
     db.commit()
 
-    # Create ownership_change event
+    # Create ownership_change event (use current_user.id for actor)
     create_task_event(
         db=db,
         task_id=task_id,
         event_type=models.TaskEventType.ownership_change,
-        actor_id=ownership.author_id,
+        actor_id=current_user.id,  # SECURITY: Use authenticated user, not request data
         old_value=str(old_owner_id) if old_owner_id is not None else None,
-        new_value=str(ownership.author_id),
+        new_value=str(current_user.id),
         metadata={"force": ownership.force}
     )
 
@@ -1415,23 +2031,45 @@ def take_ownership(task_id: int, ownership: schemas.TakeOwnership, db: Session =
 
 
 @app.delete("/api/tasks/{task_id}")
-def delete_task(task_id: int, db: Session = Depends(get_db)):
+def delete_task(
+    task_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Delete task (requires editor access to project)."""
+    logger.debug(f"User {current_user.id} deleting task {task_id}")
+
     task = db.query(models.Task).filter(models.Task.id == task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    # Check if user has editor permission for this task's project
+    require_project_permission(current_user, task.project_id, "editor", db)
+
     db.delete(task)
     db.commit()
+
+    logger.info(f"Task {task_id} deleted by user {current_user.id}")
     return {"message": "Task deleted"}
 
 
 # ============== Comments ==============
 
 @app.get("/api/tasks/{task_id}/comments", response_model=List[schemas.Comment])
-def list_comments(task_id: int, db: Session = Depends(get_db)):
+def list_comments(
+    task_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """List comments for a task (requires viewer access)."""
+    logger.debug(f"User {current_user.id} listing comments for task {task_id}")
+
     task = db.query(models.Task).filter(models.Task.id == task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+
+    # Check if user has access to this task's project
+    require_project_permission(current_user, task.project_id, "viewer", db)
 
     comments = db.query(models.Comment)\
         .options(joinedload(models.Comment.author))\
@@ -1443,26 +2081,38 @@ def list_comments(task_id: int, db: Session = Depends(get_db)):
 
 
 @app.post("/api/tasks/{task_id}/comments", response_model=schemas.Comment)
-def create_comment(task_id: int, comment: schemas.CommentCreate, db: Session = Depends(get_db)):
+def create_comment(
+    task_id: int,
+    comment: schemas.CommentCreate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Create a comment on a task (requires editor access to project)."""
+    logger.debug(f"User {current_user.id} creating comment on task {task_id}")
+
     task = db.query(models.Task).filter(models.Task.id == task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    # Check if user has editor access to this task's project (editors can create comments)
+    require_project_permission(current_user, task.project_id, "editor", db)
+
+    # SECURITY: Always use current_user.id, never trust author_id from request
     db_comment = models.Comment(
         content=comment.content,
         task_id=task_id,
-        author_id=comment.author_id
+        author_id=current_user.id  # Force current user as author
     )
     db.add(db_comment)
     db.commit()
     db.refresh(db_comment)
 
-    # Create comment_added event
+    # Create comment_added event (use current_user.id for actor)
     create_task_event(
         db=db,
         task_id=task_id,
         event_type=models.TaskEventType.comment_added,
-        actor_id=comment.author_id,
+        actor_id=current_user.id,  # SECURITY: Use authenticated user, not request data
         metadata={"comment_id": db_comment.id, "comment_preview": comment.content[:100]}
     )
 
@@ -1476,10 +2126,30 @@ def create_comment(task_id: int, comment: schemas.CommentCreate, db: Session = D
 
 
 @app.put("/api/comments/{comment_id}", response_model=schemas.Comment)
-def update_comment(comment_id: int, comment_update: schemas.CommentUpdate, db: Session = Depends(get_db)):
+def update_comment(
+    comment_id: int,
+    comment_update: schemas.CommentUpdate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update a comment (requires editor access to project and ownership)."""
+    logger.debug(f"User {current_user.id} updating comment {comment_id}")
+
     comment = db.query(models.Comment).filter(models.Comment.id == comment_id).first()
     if not comment:
         raise HTTPException(status_code=404, detail="Comment not found")
+
+    # Get task to check project access
+    task = db.query(models.Task).filter(models.Task.id == comment.task_id).first()
+    if task:
+        require_project_permission(current_user, task.project_id, "editor", db)
+
+    # Check ownership: users can only update their own comments (unless admin)
+    if comment.author_id != current_user.id and current_user.role != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Can only modify your own comments"
+        )
 
     update_data = comment_update.model_dump(exclude_unset=True)
     for key, value in update_data.items():
@@ -1491,10 +2161,29 @@ def update_comment(comment_id: int, comment_update: schemas.CommentUpdate, db: S
 
 
 @app.delete("/api/comments/{comment_id}")
-def delete_comment(comment_id: int, db: Session = Depends(get_db)):
+def delete_comment(
+    comment_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Delete a comment (requires editor access to project and ownership)."""
+    logger.debug(f"User {current_user.id} deleting comment {comment_id}")
+
     comment = db.query(models.Comment).filter(models.Comment.id == comment_id).first()
     if not comment:
         raise HTTPException(status_code=404, detail="Comment not found")
+
+    # Get task to check project access
+    task = db.query(models.Task).filter(models.Task.id == comment.task_id).first()
+    if task:
+        require_project_permission(current_user, task.project_id, "editor", db)
+
+    # Check ownership: users can only delete their own comments (unless admin)
+    if comment.author_id != current_user.id and current_user.role != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Can only delete your own comments"
+        )
 
     db.delete(comment)
     db.commit()
@@ -1504,17 +2193,78 @@ def delete_comment(comment_id: int, db: Session = Depends(get_db)):
 # ============== Dashboard Stats ==============
 
 @app.get("/api/stats")
-def get_overall_stats(db: Session = Depends(get_db)):
-    total_projects = db.query(models.Project).count()
-    total_tasks = db.query(models.Task).count()
-    backlog_tasks = db.query(models.Task).filter(models.Task.status == models.TaskStatus.backlog).count()
-    todo_tasks = db.query(models.Task).filter(models.Task.status == models.TaskStatus.todo).count()
-    in_progress_tasks = db.query(models.Task).filter(models.Task.status == models.TaskStatus.in_progress).count()
-    blocked_tasks = db.query(models.Task).filter(models.Task.status == models.TaskStatus.blocked).count()
-    review_tasks = db.query(models.Task).filter(models.Task.status == models.TaskStatus.review).count()
-    done_tasks = db.query(models.Task).filter(models.Task.status == models.TaskStatus.done).count()
+def get_overall_stats(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get overall stats filtered by user's accessible projects.
+
+    Returns aggregate statistics for projects the user has access to.
+    Admin users see system-wide stats; regular users see only their accessible projects.
+    """
+    logger.debug(f"User {current_user.id} requesting overall stats")
+
+    # Import here to avoid circular dependency
+    from auth.permissions import get_user_projects
+
+    # Get user's accessible projects (admins get all projects, others get member projects)
+    accessible_project_ids = get_user_projects(current_user, db)
+
+    # If user has no accessible projects, return zero stats
+    if not accessible_project_ids:
+        logger.debug(f"User {current_user.id} has no accessible projects")
+        return {
+            "total_projects": 0,
+            "total_tasks": 0,
+            "backlog_tasks": 0,
+            "todo_tasks": 0,
+            "in_progress_tasks": 0,
+            "blocked_tasks": 0,
+            "review_tasks": 0,
+            "done_tasks": 0,
+            "p0_incomplete": 0,
+            "completion_rate": 0.0
+        }
+
+    # Filter all queries by accessible projects
+    total_projects = len(accessible_project_ids)
+    total_tasks = db.query(models.Task).filter(
+        models.Task.project_id.in_(accessible_project_ids)
+    ).count()
+
+    backlog_tasks = db.query(models.Task).filter(
+        models.Task.project_id.in_(accessible_project_ids),
+        models.Task.status == models.TaskStatus.backlog
+    ).count()
+
+    todo_tasks = db.query(models.Task).filter(
+        models.Task.project_id.in_(accessible_project_ids),
+        models.Task.status == models.TaskStatus.todo
+    ).count()
+
+    in_progress_tasks = db.query(models.Task).filter(
+        models.Task.project_id.in_(accessible_project_ids),
+        models.Task.status == models.TaskStatus.in_progress
+    ).count()
+
+    blocked_tasks = db.query(models.Task).filter(
+        models.Task.project_id.in_(accessible_project_ids),
+        models.Task.status == models.TaskStatus.blocked
+    ).count()
+
+    review_tasks = db.query(models.Task).filter(
+        models.Task.project_id.in_(accessible_project_ids),
+        models.Task.status == models.TaskStatus.review
+    ).count()
+
+    done_tasks = db.query(models.Task).filter(
+        models.Task.project_id.in_(accessible_project_ids),
+        models.Task.status == models.TaskStatus.done
+    ).count()
 
     p0_incomplete = db.query(models.Task).filter(
+        models.Task.project_id.in_(accessible_project_ids),
         models.Task.status != models.TaskStatus.done,
         models.Task.priority == models.TaskPriority.P0
     ).count()
@@ -1537,6 +2287,7 @@ def get_overall_stats(db: Session = Depends(get_db)):
 
 @app.get("/api/search", response_model=schemas.SearchResults)
 def global_search(
+    current_user: models.User = Depends(get_current_user),
     q: str = Query(..., description="Search query (required)"),
     project_id: Optional[int] = Query(None, description="Filter to specific project"),
     search_in: Optional[str] = Query(None, description="Comma-separated entity types (tasks,projects,comments)"),
@@ -1548,12 +2299,15 @@ def global_search(
     db: Session = Depends(get_db)
 ):
     """
-    Perform full-text search across tasks, projects, and comments.
+    Perform full-text search across tasks, projects, and comments (filtered by accessible projects).
     Returns relevance-ranked results from all entities.
     Supports filtering by project, status, priority, tag, and owner.
     """
-    logger.debug(f"global_search called with query: {q}, project_id: {project_id}, search_in: {search_in}, "
-                 f"status: {status}, priority: {priority}, tag: {tag}, owner_id: {owner_id}, limit: {limit}")
+    logger.debug(f"User {current_user.id} searching: query={q}, project_id={project_id}, search_in={search_in}, "
+                 f"status={status}, priority={priority}, tag={tag}, owner_id={owner_id}, limit={limit}")
+
+    # Get user's accessible projects
+    accessible_project_ids = get_user_projects(current_user, db)
 
     if not q or not q.strip():
         logger.info("Empty search query provided")
@@ -1587,7 +2341,8 @@ def global_search(
             models.Task.updated_at,
             func.ts_rank(models.Task.search_vector, search_query).label('rank')
         ).filter(
-            models.Task.search_vector.op('@@')(search_query)
+            models.Task.search_vector.op('@@')(search_query),
+            models.Task.project_id.in_(accessible_project_ids)  # SECURITY: Only search accessible projects
         )
 
         # Apply task filters
@@ -1641,7 +2396,8 @@ def global_search(
             models.Project.updated_at,
             func.ts_rank(models.Project.search_vector, search_query).label('rank')
         ).filter(
-            models.Project.search_vector.op('@@')(search_query)
+            models.Project.search_vector.op('@@')(search_query),
+            models.Project.id.in_(accessible_project_ids)  # SECURITY: Only search accessible projects
         )
 
         # Apply project filter if specified
@@ -1682,7 +2438,8 @@ def global_search(
         ).join(
             models.Task, models.Comment.task_id == models.Task.id
         ).filter(
-            models.Comment.search_vector.op('@@')(search_query)
+            models.Comment.search_vector.op('@@')(search_query),
+            models.Task.project_id.in_(accessible_project_ids)  # SECURITY: Only search accessible projects
         )
 
         # Apply project filter via task join if specified
@@ -1725,13 +2482,14 @@ def global_search(
 @app.get("/api/tasks/{task_id}/events", response_model=schemas.TaskEventsList)
 def get_task_events(
     task_id: int,
+    current_user: models.User = Depends(get_current_user),
     event_type: Optional[schemas.TaskEventType] = Query(None),
     limit: int = Query(100, le=500),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db)
 ):
     """
-    Get event history for a specific task.
+    Get event history for a specific task (requires viewer access).
 
     Query parameters:
     - event_type: Filter by event type (optional)
@@ -1745,6 +2503,9 @@ def get_task_events(
     if not task:
         logger.info(f"Task {task_id} not found")
         raise HTTPException(status_code=404, detail="Task not found")
+
+    # SECURITY: Verify user has access to the task's project
+    require_project_permission(current_user, task.project_id, "viewer", db)
 
     # Build query
     query = db.query(models.TaskEvent)\
@@ -1772,13 +2533,14 @@ def get_task_events(
 @app.get("/api/projects/{project_id}/events", response_model=schemas.TaskEventsList)
 def get_project_events(
     project_id: int,
+    current_user: models.User = Depends(get_current_user),
     event_type: Optional[schemas.TaskEventType] = Query(None),
     limit: int = Query(100, le=500),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db)
 ):
     """
-    Get event history for all tasks in a project.
+    Get event history for all tasks in a project (requires viewer access).
 
     Query parameters:
     - event_type: Filter by event type (optional)
@@ -1792,6 +2554,9 @@ def get_project_events(
     if not project:
         logger.info(f"Project {project_id} not found")
         raise HTTPException(status_code=404, detail="Project not found")
+
+    # SECURITY: Verify user has access to the project
+    require_project_permission(current_user, project_id, "viewer", db)
 
     # Get all task IDs in the project
     task_ids = db.query(models.Task.id).filter(models.Task.project_id == project_id).all()
@@ -1827,10 +2592,21 @@ def get_project_events(
 # ============== Task Dependencies ==============
 
 @app.get("/api/tasks/{task_id}/dependencies", response_model=schemas.TaskWithDependencies)
-def get_task_dependencies(task_id: int, db: Session = Depends(get_db)):
+def get_task_dependencies(
+    task_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)):
     """Get task with all dependency information."""
     logger.debug(f"Getting task dependencies for task_id={task_id}")
 
+    # Get task for permission check
+    task = db.query(models.Task).filter(models.Task.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    # Check project permission
+    require_project_permission(current_user, task.project_id, "viewer", db)
+    
     task = db.query(models.Task)\
         .options(
             joinedload(models.Task.author),
@@ -1937,8 +2713,13 @@ def get_task_dependencies(task_id: int, db: Session = Depends(get_db)):
 
 
 @app.post("/api/tasks/{task_id}/dependencies", response_model=schemas.TaskDependency)
-def add_task_dependency(task_id: int, dependency: schemas.TaskDependencyCreate, db: Session = Depends(get_db)):
-    """Add a blocking relationship between tasks."""
+def add_task_dependency(
+    task_id: int,
+    dependency: schemas.TaskDependencyCreate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Add a blocking relationship between tasks (requires editor access)."""
     logger.debug(f"Adding dependency: blocking_task_id={dependency.blocking_task_id}, blocked_task_id={task_id}")
 
     # Get the blocked task (the one being blocked)
@@ -1946,6 +2727,9 @@ def add_task_dependency(task_id: int, dependency: schemas.TaskDependencyCreate, 
     if not blocked_task:
         logger.info(f"Blocked task {task_id} not found")
         raise HTTPException(status_code=404, detail="Blocked task not found")
+
+    # Check project permission
+    require_project_permission(current_user, blocked_task.project_id, "editor", db)
 
     # Get the blocking task
     blocking_task = db.query(models.Task).filter(models.Task.id == dependency.blocking_task_id).first()
@@ -2001,12 +2785,12 @@ def add_task_dependency(task_id: int, dependency: schemas.TaskDependencyCreate, 
     db.commit()
     db.refresh(db_dependency)
 
-    # Create dependency_added event on the blocked task
+    # Create dependency_added event on the blocked task with proper actor attribution
     create_task_event(
         db=db,
         task_id=task_id,
         event_type=models.TaskEventType.dependency_added,
-        actor_id=None,
+        actor_id=current_user.id,
         metadata={
             "blocking_task_id": dependency.blocking_task_id,
             "blocking_task_title": blocking_task.title
@@ -2018,8 +2802,13 @@ def add_task_dependency(task_id: int, dependency: schemas.TaskDependencyCreate, 
 
 
 @app.delete("/api/tasks/{task_id}/dependencies/{blocking_id}")
-def remove_task_dependency(task_id: int, blocking_id: int, db: Session = Depends(get_db)):
-    """Remove a blocking relationship."""
+def remove_task_dependency(
+    task_id: int,
+    blocking_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Remove a blocking relationship (requires editor access)."""
     logger.debug(f"Removing dependency: blocking_task_id={blocking_id}, blocked_task_id={task_id}")
 
     # Find the dependency
@@ -2034,18 +2823,27 @@ def remove_task_dependency(task_id: int, blocking_id: int, db: Session = Depends
         logger.info(f"Dependency not found: {blocking_id} -> {task_id}")
         raise HTTPException(status_code=404, detail="Dependency not found")
 
+    # Get the blocked task and check permissions
+    blocked_task = db.query(models.Task).filter(models.Task.id == task_id).first()
+    if not blocked_task:
+        logger.info(f"Blocked task {task_id} not found")
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    # Check project permission (editor or higher required)
+    require_project_permission(current_user, blocked_task.project_id, "editor", db)
+
     # Get blocking task title for event metadata
     blocking_task = db.query(models.Task).filter(models.Task.id == blocking_id).first()
 
     db.delete(dependency)
     db.commit()
 
-    # Create dependency_removed event on the blocked task
+    # Create dependency_removed event on the blocked task with proper actor attribution
     create_task_event(
         db=db,
         task_id=task_id,
         event_type=models.TaskEventType.dependency_removed,
-        actor_id=None,
+        actor_id=current_user.id,
         metadata={
             "blocking_task_id": blocking_id,
             "blocking_task_title": blocking_task.title if blocking_task else None
@@ -2063,7 +2861,7 @@ async def upload_attachment(
     task_id: int,
     request: Request,
     file: UploadFile = File(...),
-    uploaded_by: Optional[int] = Query(None),
+    current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Upload a file attachment to a task."""
@@ -2095,11 +2893,8 @@ async def upload_attachment(
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    # Validate uploaded_by author exists (if provided)
-    if uploaded_by is not None:
-        author = db.query(models.Author).filter(models.Author.id == uploaded_by).first()
-        if not author:
-            raise HTTPException(status_code=400, detail=f"Author with id {uploaded_by} not found")
+    # Check project permission
+    require_project_permission(current_user, task.project_id, "editor", db)
 
     # Validate file
     validate_file_upload(file)
@@ -2116,7 +2911,7 @@ async def upload_attachment(
             filepath=filepath,
             mime_type=file.content_type,
             file_size=file_size,
-            uploaded_by=uploaded_by
+            uploaded_by=current_user.id  # SECURITY: Always use authenticated user
         )
         db.add(attachment)
         db.commit()
@@ -2137,7 +2932,7 @@ async def upload_attachment(
         db=db,
         task_id=task_id,
         event_type=models.TaskEventType.attachment_added,
-        actor_id=uploaded_by,
+        actor_id=current_user.id,  # SECURITY: Always use authenticated user
         metadata={
             "attachment_id": attachment.id,
             "filename": file.filename,
@@ -2153,13 +2948,19 @@ async def upload_attachment(
 
 
 @app.get("/api/tasks/{task_id}/attachments", response_model=List[schemas.Attachment])
-def list_attachments(task_id: int, db: Session = Depends(get_db)):
+def list_attachments(
+    task_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)):
     """List all attachments for a task."""
     # Verify task exists
     task = db.query(models.Task).filter(models.Task.id == task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    # Check project permission
+    require_project_permission(current_user, task.project_id, "viewer", db)
+    
     attachments = db.query(models.TaskAttachment)\
         .filter(models.TaskAttachment.task_id == task_id)\
         .options(joinedload(models.TaskAttachment.uploader))\
@@ -2172,7 +2973,7 @@ def list_attachments(task_id: int, db: Session = Depends(get_db)):
 def delete_attachment(
     task_id: int,
     attachment_id: int,
-    actor_id: Optional[int] = Query(None),
+    current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Delete a file attachment."""
@@ -2188,6 +2989,14 @@ def delete_attachment(
 
     if not attachment:
         raise HTTPException(status_code=404, detail="Attachment not found")
+
+    # Get task to check project permission
+    task = db.query(models.Task).filter(models.Task.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    # Check project permission
+    require_project_permission(current_user, task.project_id, "editor", db)
 
     # Delete file from disk
     try:
@@ -2211,7 +3020,7 @@ def delete_attachment(
         db=db,
         task_id=task_id,
         event_type=models.TaskEventType.attachment_deleted,
-        actor_id=actor_id,
+        actor_id=current_user.id,  # SECURITY: Always use authenticated user
         metadata={
             "attachment_id": attachment_id,
             "filename": original_filename
@@ -2226,7 +3035,7 @@ def delete_attachment(
 def add_external_link(
     task_id: int,
     link: schemas.ExternalLinkCreate,
-    actor_id: Optional[int] = Query(None),
+    current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Add an external link to a task."""
@@ -2236,6 +3045,9 @@ def add_external_link(
     task = db.query(models.Task).filter(models.Task.id == task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+
+    # Check project permission
+    require_project_permission(current_user, task.project_id, "editor", db)
 
     # Validate URL to prevent XSS
     validate_external_url(link.url)
@@ -2260,7 +3072,7 @@ def add_external_link(
         db=db,
         task_id=task_id,
         event_type=models.TaskEventType.link_added,
-        actor_id=actor_id,
+        actor_id=current_user.id,  # SECURITY: Always use authenticated user
         metadata={"link": link_obj}
     )
 
@@ -2272,7 +3084,7 @@ def add_external_link(
 def remove_external_link(
     task_id: int,
     url: str = Query(...),
-    actor_id: Optional[int] = Query(None),
+    current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Remove an external link from a task."""
@@ -2282,6 +3094,9 @@ def remove_external_link(
     task = db.query(models.Task).filter(models.Task.id == task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+
+    # Check project permission
+    require_project_permission(current_user, task.project_id, "editor", db)
 
     # Find and remove link
     if task.external_links:
@@ -2301,7 +3116,7 @@ def remove_external_link(
             db=db,
             task_id=task_id,
             event_type=models.TaskEventType.link_removed,
-            actor_id=actor_id,
+            actor_id=current_user.id,  # SECURITY: Always use authenticated user
             metadata={"link": removed_link}
         )
 
@@ -2315,7 +3130,7 @@ def remove_external_link(
 def update_metadata(
     task_id: int,
     metadata_update: schemas.MetadataUpdate,
-    actor_id: Optional[int] = Query(None),
+    current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Add or update a custom metadata key-value pair."""
@@ -2325,6 +3140,9 @@ def update_metadata(
     task = db.query(models.Task).filter(models.Task.id == task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+
+    # Check project permission
+    require_project_permission(current_user, task.project_id, "editor", db)
 
     # Validate metadata key (prevent forward slashes for URL compatibility)
     if '/' in metadata_update.key:
@@ -2349,7 +3167,7 @@ def update_metadata(
         db=db,
         task_id=task_id,
         event_type=models.TaskEventType.metadata_updated,
-        actor_id=actor_id,
+        actor_id=current_user.id,  # SECURITY: Always use authenticated user
         field_name=metadata_update.key,
         old_value=str(old_value) if old_value is not None else None,
         new_value=metadata_update.value,
@@ -2364,7 +3182,7 @@ def update_metadata(
 def delete_metadata(
     task_id: int,
     key: str,
-    actor_id: Optional[int] = Query(None),
+    current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Remove a custom metadata key."""
@@ -2374,6 +3192,9 @@ def delete_metadata(
     task = db.query(models.Task).filter(models.Task.id == task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+
+    # Check project permission
+    require_project_permission(current_user, task.project_id, "editor", db)
 
     # Check if key exists
     if not task.custom_metadata or key not in task.custom_metadata:
@@ -2392,7 +3213,7 @@ def delete_metadata(
         db=db,
         task_id=task_id,
         event_type=models.TaskEventType.metadata_updated,
-        actor_id=actor_id,
+        actor_id=current_user.id,  # SECURITY: Always use authenticated user
         field_name=key,
         old_value=str(old_value),
         new_value=None,
@@ -2406,7 +3227,11 @@ def delete_metadata(
 # ============== Bulk Operations ==============
 
 @app.post("/api/tasks/bulk-update", response_model=schemas.BulkOperationResult)
-def bulk_update_tasks(bulk_update: schemas.BulkTaskUpdate, db: Session = Depends(get_db)):
+def bulk_update_tasks(
+    bulk_update: schemas.BulkTaskUpdate,
+    current_user: models.User = Depends(get_current_user),  # SECURITY: Require authentication
+    db: Session = Depends(get_db)
+):
     """
     Update multiple tasks in a single transaction with all-or-nothing semantics.
 
@@ -2454,6 +3279,20 @@ def bulk_update_tasks(bulk_update: schemas.BulkTaskUpdate, db: Session = Depends
                 error="Task not found",
                 error_code="NOT_FOUND"
             ))
+
+    # SECURITY: Check project permissions for all tasks
+    if not errors:  # Only check if all tasks exist
+        logger.debug("Checking project permissions for all tasks")
+        for task_id, task in tasks_dict.items():
+            try:
+                require_project_permission(current_user, task.project_id, "editor", db)
+            except HTTPException as e:
+                logger.debug(f"Task {task_id}: permission denied for project {task.project_id}")
+                errors.append(schemas.BulkOperationError(
+                    task_id=task_id,
+                    error=f"Insufficient permissions for project {task.project_id}",
+                    error_code="PERMISSION_DENIED"
+                ))
 
     # If we have missing tasks, return early
     if errors:
@@ -2627,7 +3466,7 @@ def bulk_update_tasks(bulk_update: schemas.BulkTaskUpdate, db: Session = Depends
                             db=db,
                             task_id=task_id,
                             event_type=models.TaskEventType.status_change,
-                            actor_id=bulk_update.actor_id,
+                            actor_id=current_user.id,  # SECURITY: Use authenticated user
                             field_name='status',
                             old_value=old_str,
                             new_value=new_str,
@@ -2638,7 +3477,7 @@ def bulk_update_tasks(bulk_update: schemas.BulkTaskUpdate, db: Session = Depends
                             db=db,
                             task_id=task_id,
                             event_type=models.TaskEventType.field_update,
-                            actor_id=bulk_update.actor_id,
+                            actor_id=current_user.id,  # SECURITY: Use authenticated user
                             field_name=field_name,
                             old_value=old_str,
                             new_value=new_str,
@@ -2663,14 +3502,18 @@ def bulk_update_tasks(bulk_update: schemas.BulkTaskUpdate, db: Session = Depends
 
 
 @app.post("/api/tasks/bulk-take-ownership", response_model=schemas.BulkOperationResult)
-def bulk_take_ownership(bulk_ownership: schemas.BulkTakeOwnership, db: Session = Depends(get_db)):
+def bulk_take_ownership(
+    bulk_ownership: schemas.BulkTakeOwnership,
+    current_user: models.User = Depends(get_current_user),  # SECURITY: Require authentication
+    db: Session = Depends(get_db)
+):
     """
     Take ownership of multiple tasks in a single transaction.
 
     Validates all tasks before assigning ownership. If force=False and any task
     is already owned, returns error without making any changes.
     """
-    logger.info(f"Bulk taking ownership of {len(bulk_ownership.task_ids)} tasks for author {bulk_ownership.author_id}")
+    logger.info(f"Bulk taking ownership of {len(bulk_ownership.task_ids)} tasks for user {current_user.id}")
     logger.debug(f"Task IDs: {bulk_ownership.task_ids}, Force: {bulk_ownership.force}")
 
     if not bulk_ownership.task_ids:
@@ -2688,14 +3531,8 @@ def bulk_take_ownership(bulk_ownership: schemas.BulkTakeOwnership, db: Session =
 
     errors = []
 
-    # Phase 1: Pre-validate ALL tasks and author
-    logger.debug("Phase 1: Pre-validating all tasks and author")
-
-    # Verify author exists
-    author = db.query(models.Author).filter(models.Author.id == bulk_ownership.author_id).first()
-    if not author:
-        logger.info(f"Author {bulk_ownership.author_id} not found")
-        raise HTTPException(status_code=404, detail="Author not found")
+    # Phase 1: Pre-validate ALL tasks
+    logger.debug("Phase 1: Pre-validating all tasks")
 
     # Fetch all tasks in a single query
     tasks_dict = {}
@@ -2713,9 +3550,23 @@ def bulk_take_ownership(bulk_ownership: schemas.BulkTakeOwnership, db: Session =
                 error_code="NOT_FOUND"
             ))
 
-    # If we have missing tasks, return early
+    # SECURITY: Check project permissions for all tasks
+    if not errors:  # Only check if all tasks exist
+        logger.debug("Checking project permissions for all tasks")
+        for task_id, task in tasks_dict.items():
+            try:
+                require_project_permission(current_user, task.project_id, "editor", db)
+            except HTTPException as e:
+                logger.debug(f"Task {task_id}: permission denied for project {task.project_id}")
+                errors.append(schemas.BulkOperationError(
+                    task_id=task_id,
+                    error=f"Insufficient permissions for project {task.project_id}",
+                    error_code="PERMISSION_DENIED"
+                ))
+
+    # If we have missing tasks or permission errors, return early
     if errors:
-        logger.info(f"Pre-validation failed: {len(errors)} task(s) not found")
+        logger.info(f"Pre-validation failed: {len(errors)} error(s) found")
         return schemas.BulkOperationResult(
             success=False,
             processed_count=0,
@@ -2759,7 +3610,7 @@ def bulk_take_ownership(bulk_ownership: schemas.BulkTakeOwnership, db: Session =
         # Update all tasks
         for task_id in bulk_ownership.task_ids:
             task = tasks_dict[task_id]
-            task.owner_id = bulk_ownership.author_id
+            task.owner_id = current_user.id
 
         # Phase 3: Create ownership_change events for all tasks (within same transaction)
         logger.debug("Phase 3: Creating ownership_change events")
@@ -2770,9 +3621,9 @@ def bulk_take_ownership(bulk_ownership: schemas.BulkTakeOwnership, db: Session =
                 db=db,
                 task_id=task_id,
                 event_type=models.TaskEventType.ownership_change,
-                actor_id=bulk_ownership.author_id,
+                actor_id=current_user.id,
                 old_value=str(old_owner_id) if old_owner_id is not None else None,
-                new_value=str(bulk_ownership.author_id),
+                new_value=str(current_user.id),
                 metadata={"force": bulk_ownership.force},
                 commit=False  # Commit once at end
             )
@@ -2780,7 +3631,7 @@ def bulk_take_ownership(bulk_ownership: schemas.BulkTakeOwnership, db: Session =
         # Commit all changes (ownership + events) in single transaction
         db.commit()
 
-        logger.critical(f"Successfully assigned ownership of {len(bulk_ownership.task_ids)} tasks to author {bulk_ownership.author_id}")
+        logger.critical(f"Successfully assigned ownership of {len(bulk_ownership.task_ids)} tasks to user {current_user.id}")
         return schemas.BulkOperationResult(
             success=True,
             processed_count=len(bulk_ownership.task_ids),
@@ -2797,6 +3648,7 @@ def bulk_take_ownership(bulk_ownership: schemas.BulkTakeOwnership, db: Session =
 @app.post("/api/tasks/bulk-delete", response_model=schemas.BulkDeleteResult)
 def bulk_delete_tasks(
     bulk_delete: schemas.BulkTaskDelete,
+    current_user: models.User = Depends(get_current_user),  # SECURITY: Require authentication
     db: Session = Depends(get_db)
 ):
     """
@@ -2848,6 +3700,18 @@ def bulk_delete_tasks(
             status_code=404,
             detail=f"Tasks not found: {sorted(missing_tasks)}"
         )
+
+    # SECURITY: Check project permissions for all tasks
+    logger.debug("Checking project permissions for all tasks")
+    for task in tasks:
+        try:
+            require_project_permission(current_user, task.project_id, "editor", db)
+        except HTTPException as e:
+            logger.info(f"Task {task.id}: permission denied for project {task.project_id}")
+            raise HTTPException(
+                status_code=403,
+                detail=f"Insufficient permissions for project {task.project_id}"
+            )
 
     # Count subtasks that will be cascade-deleted
     # This includes all descendants in the subtask tree
@@ -2942,7 +3806,11 @@ def bulk_delete_tasks(
 
 
 @app.post("/api/tasks/bulk-create", response_model=schemas.BulkOperationResult)
-def bulk_create_tasks(bulk_create: schemas.BulkTaskCreate, db: Session = Depends(get_db)):
+def bulk_create_tasks(
+    bulk_create: schemas.BulkTaskCreate,
+    current_user: models.User = Depends(get_current_user),  # SECURITY: Require authentication
+    db: Session = Depends(get_db)
+):
     """
     Create multiple tasks in a single transaction.
 
@@ -2967,16 +3835,14 @@ def bulk_create_tasks(bulk_create: schemas.BulkTaskCreate, db: Session = Depends
     # Phase 1: Pre-validate ALL tasks
     logger.debug("Phase 1: Pre-validating all tasks")
 
-    # Collect all project_ids, author_ids, owner_ids, parent_task_ids
+    # Collect all project_ids, owner_ids, parent_task_ids
+    # Note: author_id is always forced to current_user.id for security
     project_ids = set()
-    author_ids = set()
     owner_ids = set()
     parent_task_ids = set()
 
     for i, task in enumerate(bulk_create.tasks):
         project_ids.add(task.project_id)
-        if task.author_id is not None:
-            author_ids.add(task.author_id)
         if task.owner_id is not None:
             owner_ids.add(task.owner_id)
         if task.parent_task_id is not None:
@@ -3016,28 +3882,28 @@ def bulk_create_tasks(bulk_create: schemas.BulkTaskCreate, db: Session = Depends
                     error_code="NOT_FOUND"
                 ))
 
-    # Verify all authors exist (if provided)
-    if author_ids:
-        existing_authors = db.query(models.Author.id)\
-            .filter(models.Author.id.in_(author_ids))\
-            .all()
-        existing_author_ids = {row[0] for row in existing_authors}
+    # SECURITY: Check project permissions for all tasks
+    if not errors:  # Only check if all projects exist
+        logger.debug("Checking project permissions for all tasks")
+        for i, task in enumerate(bulk_create.tasks):
+            try:
+                require_project_permission(current_user, task.project_id, "editor", db)
+            except HTTPException as e:
+                logger.debug(f"Task {i}: permission denied for project {task.project_id}")
+                errors.append(schemas.BulkOperationError(
+                    task_id=i,
+                    error=f"Insufficient permissions for project {task.project_id}",
+                    error_code="PERMISSION_DENIED"
+                ))
 
-        missing_authors = author_ids - existing_author_ids
-        if missing_authors:
-            logger.info(f"Authors not found: {missing_authors}")
-            for i, task in enumerate(bulk_create.tasks):
-                if task.author_id in missing_authors:
-                    errors.append(schemas.BulkOperationError(
-                        task_id=i,
-                        error=f"Author {task.author_id} not found",
-                        error_code="NOT_FOUND"
-                    ))
+    # SECURITY: No need to verify authors - we force author_id to current_user.id
+    # Removed author validation as all tasks will be authored by the current user
 
-    # Verify all owners exist (if provided)
+    # Verify all owners exist and have project access
     if owner_ids:
-        existing_owners = db.query(models.Author.id)\
-            .filter(models.Author.id.in_(owner_ids))\
+        # Check if owners exist
+        existing_owners = db.query(models.User.id)\
+            .filter(models.User.id.in_(owner_ids))\
             .all()
         existing_owner_ids = {row[0] for row in existing_owners}
 
@@ -3051,6 +3917,20 @@ def bulk_create_tasks(bulk_create: schemas.BulkTaskCreate, db: Session = Depends
                         error=f"Owner {task.owner_id} not found",
                         error_code="NOT_FOUND"
                     ))
+
+        # Validate project membership for all valid owners
+        if not errors or all(e.error_code != "NOT_FOUND" for e in errors):
+            logger.debug("Validating owner project memberships")
+            for i, task in enumerate(bulk_create.tasks):
+                if task.owner_id and task.owner_id in existing_owner_ids:
+                    owner = db.query(models.User).filter(models.User.id == task.owner_id).first()
+                    if not has_project_access(owner, task.project_id, db):
+                        logger.info(f"Task {i}: owner {task.owner_id} is not a member of project {task.project_id}")
+                        errors.append(schemas.BulkOperationError(
+                            task_id=i,
+                            error=f"Cannot assign task to user (ID {task.owner_id}): user is not a member of project {task.project_id}",
+                            error_code="OWNER_NOT_PROJECT_MEMBER"
+                        ))
 
     # Verify all parent tasks exist and are in same project
     if parent_task_ids:
@@ -3100,7 +3980,10 @@ def bulk_create_tasks(bulk_create: schemas.BulkTaskCreate, db: Session = Depends
 
         # Create all tasks
         for task in bulk_create.tasks:
-            db_task = models.Task(**task.model_dump())
+            task_data = task.model_dump()
+            # SECURITY: Force author_id to current user
+            task_data['author_id'] = current_user.id
+            db_task = models.Task(**task_data)
             db.add(db_task)
             db.flush()  # Get the ID without committing
             created_task_ids.append(db_task.id)
@@ -3113,7 +3996,7 @@ def bulk_create_tasks(bulk_create: schemas.BulkTaskCreate, db: Session = Depends
                 db=db,
                 task_id=task_id,
                 event_type=models.TaskEventType.task_created,
-                actor_id=bulk_create.actor_id or task.author_id,
+                actor_id=current_user.id,  # SECURITY: Use current user as actor
                 metadata={
                     "title": task.title,
                     "status": task.status.value,
@@ -3141,18 +4024,23 @@ def bulk_create_tasks(bulk_create: schemas.BulkTaskCreate, db: Session = Depends
 
 
 @app.post("/api/tasks/bulk-add-dependencies", response_model=schemas.BulkOperationResult)
-def bulk_add_dependencies(bulk_deps: schemas.BulkAddDependencies, db: Session = Depends(get_db)):
+def bulk_add_dependencies(
+    bulk_deps: schemas.BulkAddDependencies,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """
-    Add multiple task dependencies in a single transaction.
+    Add multiple task dependencies in a single transaction (requires editor access).
 
     Validates all dependencies before creating any. Checks for:
+    - Authentication and project permissions (editor or higher)
     - Task existence
     - Same project constraint
     - Circular dependencies (within batch and against existing graph)
     - Parent-subtask deadlock prevention
     - Duplicate dependencies
     """
-    logger.info(f"Bulk adding {len(bulk_deps.dependencies)} dependencies")
+    logger.info(f"User {current_user.id} bulk adding {len(bulk_deps.dependencies)} dependencies")
     logger.debug(f"Dependencies: {[(d.blocking_task_id, d.blocked_task_id) for d in bulk_deps.dependencies]}")
 
     if not bulk_deps.dependencies:
@@ -3178,6 +4066,29 @@ def bulk_add_dependencies(bulk_deps: schemas.BulkAddDependencies, db: Session = 
     # Fetch all tasks in a single query
     tasks = db.query(models.Task).filter(models.Task.id.in_(all_task_ids)).all()
     tasks_dict = {task.id: task for task in tasks}
+
+    # Check project permissions for all affected projects
+    # Collect unique project IDs from all tasks
+    affected_projects = set(task.project_id for task in tasks)
+    logger.debug(f"Checking permissions for {len(affected_projects)} projects")
+
+    # Verify user has editor access to all affected projects
+    for project_id in affected_projects:
+        try:
+            require_project_permission(current_user, project_id, "editor", db)
+        except HTTPException as e:
+            # If user lacks permission for any project, fail the entire operation
+            logger.info(f"User {current_user.id} lacks editor permission for project {project_id}")
+            return schemas.BulkOperationResult(
+                success=False,
+                processed_count=0,
+                task_ids=[],
+                errors=[schemas.BulkOperationError(
+                    task_id=None,
+                    error=f"Insufficient permissions for project {project_id}. Editor role required.",
+                    error_code="PERMISSION_DENIED"
+                )]
+            )
 
     # Check for non-existent tasks
     missing_tasks = all_task_ids - set(tasks_dict.keys())
@@ -3402,7 +4313,7 @@ def bulk_add_dependencies(bulk_deps: schemas.BulkAddDependencies, db: Session = 
                 db=db,
                 task_id=blocked_id,
                 event_type=models.TaskEventType.dependency_added,
-                actor_id=bulk_deps.actor_id,
+                actor_id=current_user.id,  # Use authenticated user, not client-provided actor_id
                 metadata={
                     "blocking_task_id": blocking_id,
                     "blocking_task_title": blocking_task.title

@@ -7,6 +7,7 @@ import {
   AlertCircle,
   ArrowLeft,
   Bug,
+  Grid3x3,
   Lightbulb,
   MessageSquare,
   Plus,
@@ -19,7 +20,7 @@ import {
   getProject,
   getProjectStats,
   getTasks,
-  getAuthors,
+  getProjectMembers,
   createTask,
   updateTask,
   deleteTask,
@@ -50,13 +51,15 @@ export default function ProjectDetail() {
   const [newDescription, setNewDescription] = useState('');
   const [newTag, setNewTag] = useState<'bug' | 'feature' | 'idea'>('feature');
   const [newPriority, setNewPriority] = useState<'P0' | 'P1'>('P1');
-  const [newAuthorId, setNewAuthorId] = useState<number | undefined>();
   const [newDueDate, setNewDueDate] = useState('');
   const [newEstimatedHours, setNewEstimatedHours] = useState('');
 
   useEffect(() => {
     loadProject();
-    getAuthors().then(setAuthors).catch(console.error);
+    // Load project members instead of all system users (requires viewer access, not admin)
+    getProjectMembers(projectId)
+      .then(members => setAuthors(members.map(m => m.user)))
+      .catch(() => setAuthors([])); // Graceful degradation on error
   }, [projectId]);
 
   // Track search request ID to prevent race conditions
@@ -123,7 +126,6 @@ export default function ProjectDetail() {
         description: newDescription.trim() || undefined,
         tag: newTag,
         priority: newPriority,
-        author_id: newAuthorId,
         due_date: newDueDate ? localInputToUTC(newDueDate) : undefined,
         estimated_hours: newEstimatedHours !== '' ? parseFloat(newEstimatedHours) : undefined
       });
@@ -131,7 +133,6 @@ export default function ProjectDetail() {
       setNewDescription('');
       setNewTag('feature');
       setNewPriority('P1');
-      setNewAuthorId(undefined);
       setNewDueDate('');
       setNewEstimatedHours('');
       setShowNewTask(false);
@@ -238,13 +239,22 @@ export default function ProjectDetail() {
             </p>
           )}
         </div>
-        <button
-          onClick={handleDeleteProject}
-          className="p-2 text-red-600 hover:bg-red-50 rounded-lg"
-          title="Delete project"
-        >
-          <Trash2 className="w-5 h-5" />
-        </button>
+        <div className="flex items-center gap-2">
+          <Link
+            href={`/projects/${projectId}/board`}
+            className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors flex items-center gap-2"
+          >
+            <Grid3x3 className="w-5 h-5" />
+            Board View
+          </Link>
+          <button
+            onClick={handleDeleteProject}
+            className="p-2 text-red-600 hover:bg-red-50 rounded-lg"
+            title="Delete project"
+          >
+            <Trash2 className="w-5 h-5" />
+          </button>
+        </div>
       </div>
 
       {/* Stats */}
@@ -381,16 +391,6 @@ export default function ProjectDetail() {
                 >
                   <option value="P1">P1</option>
                   <option value="P0">P0</option>
-                </select>
-                <select
-                  value={newAuthorId || ''}
-                  onChange={(e) => setNewAuthorId(e.target.value ? Number(e.target.value) : undefined)}
-                  className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-                >
-                  <option value="">Author</option>
-                  {authors.map((a) => (
-                    <option key={a.id} value={a.id}>{a.name}</option>
-                  ))}
                 </select>
               </div>
             </div>

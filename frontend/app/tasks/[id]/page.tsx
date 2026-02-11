@@ -29,7 +29,7 @@ import {
 } from 'lucide-react';
 import {
   getTask,
-  getAuthors,
+  getProjectMembers,
   updateTask,
   deleteTask,
   createComment,
@@ -88,7 +88,6 @@ export default function TaskDetail() {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
   const [newComment, setNewComment] = useState('');
-  const [commentAuthorId, setCommentAuthorId] = useState<number | undefined>();
   const [selectedOwnerId, setSelectedOwnerId] = useState<number | null>(null);
 
   // Subtasks state
@@ -136,8 +135,16 @@ export default function TaskDetail() {
     loadTask();
     loadSubtasks();
     loadDependencies();
-    getAuthors().then(setAuthors).catch(console.error);
   }, [taskId]);
+
+  // Load project members after task is loaded (requires viewer access, not admin)
+  useEffect(() => {
+    if (task?.project_id) {
+      getProjectMembers(task.project_id)
+        .then(members => setAuthors(members.map(m => m.user)))
+        .catch(() => setAuthors([])); // Graceful degradation on error
+    }
+  }, [task?.project_id]);
 
   const loadTask = async () => {
     try {
@@ -261,8 +268,7 @@ export default function TaskDetail() {
     if (!newComment.trim()) return;
     try {
       await createComment(taskId, {
-        content: newComment.trim(),
-        author_id: commentAuthorId
+        content: newComment.trim()
       });
       setNewComment('');
       loadTask();
@@ -365,7 +371,7 @@ export default function TaskDetail() {
     setUploadError('');
 
     try {
-      await uploadAttachment(taskId, file, 1); // Using author_id=1 (Admin)
+      await uploadAttachment(taskId, file);
       await loadTask(); // Reload task to show new attachment
       e.target.value = ''; // Reset file input
     } catch (error: any) {
@@ -380,7 +386,7 @@ export default function TaskDetail() {
     if (!confirm('Are you sure you want to delete this attachment?')) return;
 
     try {
-      await deleteAttachment(taskId, attachmentId, 1);
+      await deleteAttachment(taskId, attachmentId);
       await loadTask();
     } catch (error) {
       console.error('Failed to delete attachment:', error);
@@ -394,7 +400,7 @@ export default function TaskDetail() {
 
     setSubmittingLink(true);
     try {
-      await addExternalLink(taskId, { url: newLinkUrl, label: newLinkLabel || null }, 1);
+      await addExternalLink(taskId, { url: newLinkUrl, label: newLinkLabel || undefined });
       await loadTask();
       setNewLinkUrl('');
       setNewLinkLabel('');
@@ -411,7 +417,7 @@ export default function TaskDetail() {
     if (!confirm('Are you sure you want to remove this link?')) return;
 
     try {
-      await removeExternalLink(taskId, url, 1);
+      await removeExternalLink(taskId, url);
       await loadTask();
     } catch (error) {
       console.error('Failed to remove link:', error);
@@ -425,7 +431,7 @@ export default function TaskDetail() {
 
     setSubmittingMetadata(true);
     try {
-      await updateMetadata(taskId, { key: newMetadataKey, value: newMetadataValue }, 1);
+      await updateMetadata(taskId, { key: newMetadataKey, value: newMetadataValue });
       await loadTask();
       setNewMetadataKey('');
       setNewMetadataValue('');
@@ -442,7 +448,7 @@ export default function TaskDetail() {
     if (!confirm(`Are you sure you want to delete the "${key}" metadata?`)) return;
 
     try {
-      await deleteMetadata(taskId, key, 1);
+      await deleteMetadata(taskId, key);
       await loadTask();
     } catch (error) {
       console.error('Failed to delete metadata:', error);
@@ -1418,22 +1424,6 @@ export default function TaskDetail() {
 
           {/* Add Comment Form */}
           <form onSubmit={handleAddComment} className="mb-6">
-            <div className="flex gap-2 mb-2">
-              <select
-                value={commentAuthorId || ''}
-                onChange={(e) =>
-                  setCommentAuthorId(e.target.value ? Number(e.target.value) : undefined)
-                }
-                className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
-              >
-                <option value="">Comment as...</option>
-                {authors.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name}
-                  </option>
-                ))}
-              </select>
-            </div>
             <div className="flex gap-2">
               <textarea
                 value={newComment}

@@ -48,6 +48,52 @@ A full-stack task tracking system with PostgreSQL, FastAPI backend, Next.js fron
    ./stop.sh
    ```
 
+## Environment Configuration
+
+### Development vs Production
+
+The Task Tracker supports different security levels based on the `ENVIRONMENT` variable:
+
+**Development Environments** (`dev`, `development`, `local`):
+- Default admin password: `admin123` (if `ADMIN_PASSWORD` not set)
+- Auto-generated JWT secret key (if `JWT_SECRET_KEY` not set)
+- Relaxed cookie security settings (HTTP allowed)
+- Designed for local development convenience
+
+**Production-like Environments** (`production`, `staging`):
+- Requires explicit `ADMIN_PASSWORD` (startup fails if not set)
+- Requires explicit `JWT_SECRET_KEY` (startup fails if not set)
+- Enforces secure cookie settings (HTTPS only)
+- Stricter security validations
+
+### Configuration Files
+
+**For Production/Staging:**
+- Use `backend/.env.example` as a template
+- Set `ENVIRONMENT=production` or `ENVIRONMENT=staging`
+- **MUST** set a strong `ADMIN_PASSWORD`
+- **MUST** set a secure `JWT_SECRET_KEY`
+
+**For Local Development:**
+- Use `backend/.env.local.example` as a template
+- Set `ENVIRONMENT=dev`
+- Includes dev-friendly defaults (insecure but convenient)
+
+### Security Function: `is_production_like()`
+
+The backend uses `is_production_like()` helper to determine security behavior:
+- Returns `True` for `production` and `staging` environments
+- Returns `False` for `dev`, `development`, `local` environments
+- Used for JWT validation, cookie security, and admin password requirements
+
+**Example:**
+```python
+# In backend/auth/security.py
+def is_production_like() -> bool:
+    env = os.environ.get("ENVIRONMENT", "development").lower()
+    return env in ("production", "staging")
+```
+
 ## MCP Server Setup
 
 The MCP server allows programmatic access to the task tracker through Claude Desktop or other MCP clients.

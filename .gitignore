@@ -22,6 +22,7 @@ out/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+tsconfig.tsbuildinfo
 
 # Environment variables
 .env
@@ -48,10 +49,14 @@ htmlcov/
 .pytest_cache/
 coverage/
 
-# MCP
+# MCP - NEVER commit actual configs with API keys
 .mcp-servers/
 .playwright-mcp/
+# Local config files (never commit - contain API keys)
 .mcp.json
+.mcp.local.json
+# Template is OK to commit
+!.mcp.json.template
 
 # Screenshots
 *.png
@@ -67,3 +72,4 @@ backend/uploads/
 *-after-fix.txt
 *-test.txt
 tasks-*.txt
+.mcp.local.json

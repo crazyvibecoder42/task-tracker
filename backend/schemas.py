@@ -1,6 +1,6 @@
 from pydantic import BaseModel, EmailStr, Field
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Literal
 from enum import Enum
 
 
@@ -48,23 +48,97 @@ class TaskStatus(str, Enum):
     done = "done"
 
 
-# Author schemas
-class AuthorBase(BaseModel):
+# Role type aliases for validation
+UserRole = Literal["admin", "editor", "viewer"]
+ProjectMemberRole = Literal["owner", "editor", "viewer"]
+
+
+# User schemas
+class UserBase(BaseModel):
     name: str
     email: EmailStr
 
 
-class AuthorCreate(AuthorBase):
-    pass
+class UserCreate(UserBase):
+    password: str = Field(..., min_length=8, max_length=100, description="Password must be at least 8 characters")
+    role: Optional[UserRole] = "editor"
 
 
-class AuthorUpdate(BaseModel):
+class UserUpdate(BaseModel):
     name: Optional[str] = None
     email: Optional[EmailStr] = None
+    role: Optional[UserRole] = None
+    is_active: Optional[bool] = None
 
 
-class Author(AuthorBase):
+class User(UserBase):
     id: int
+    role: UserRole = "editor"
+    is_active: bool = True
+    email_verified: bool = False
+    last_login_at: Optional[datetime] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# Auth schemas
+class UserRegister(BaseModel):
+    name: str
+    email: EmailStr
+    password: str = Field(..., min_length=8, max_length=100, description="Password must be at least 8 characters")
+
+
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    expires_in: int
+
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
+
+
+# API Key schemas
+class APIKeyCreate(BaseModel):
+    name: str
+    expires_at: Optional[datetime] = None
+
+
+class APIKeyResponse(BaseModel):
+    id: int
+    name: str
+    key: Optional[str] = None  # Only returned on creation
+    key_preview: Optional[str] = None
+    user_id: int
+    expires_at: Optional[datetime] = None
+    last_used_at: Optional[datetime] = None
+    is_active: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# Project Member schemas
+class ProjectMemberCreate(BaseModel):
+    user_id: int
+    role: ProjectMemberRole = "editor"
+
+
+class ProjectMemberResponse(BaseModel):
+    id: int
+    project_id: int
+    user_id: int
+    user: Optional[User] = None
+    role: ProjectMemberRole
     created_at: datetime
 
     class Config:
@@ -77,7 +151,7 @@ class CommentBase(BaseModel):
 
 
 class CommentCreate(CommentBase):
-    author_id: Optional[int] = None
+    pass
 
 
 class CommentUpdate(BaseModel):
@@ -88,7 +162,7 @@ class Comment(CommentBase):
     id: int
     task_id: int
     author_id: Optional[int]
-    author: Optional[Author] = None
+    author: Optional[User] = None
     created_at: datetime
     updated_at: datetime
 
@@ -109,7 +183,7 @@ class Attachment(AttachmentBase):
     task_id: int
     filepath: str
     uploaded_by: Optional[int]
-    uploader: Optional[Author] = None
+    uploader: Optional[User] = None
     created_at: datetime
 
     class Config:
@@ -152,7 +226,7 @@ class TaskEventBase(BaseModel):
 class TaskEvent(TaskEventBase):
     id: int
     created_at: datetime
-    actor: Optional[Author] = None
+    actor: Optional[User] = None
 
     class Config:
         from_attributes = True
@@ -178,7 +252,6 @@ class TaskBase(BaseModel):
 
 class TaskCreate(TaskBase):
     project_id: int
-    author_id: Optional[int] = None
     owner_id: Optional[int] = None
     parent_task_id: Optional[int] = None
 
@@ -197,7 +270,6 @@ class TaskUpdate(BaseModel):
 
 
 class TakeOwnership(BaseModel):
-    author_id: int
     force: bool = False
 
 
@@ -205,9 +277,9 @@ class Task(TaskBase):
     id: int
     project_id: int
     author_id: Optional[int]
-    author: Optional[Author] = None
+    author: Optional[User] = None
     owner_id: Optional[int]
-    owner: Optional[Author] = None
+    owner: Optional[User] = None
     parent_task_id: Optional[int] = None
     comments: List[Comment] = Field(default_factory=list)
     attachments: List[Attachment] = Field(default_factory=list)
@@ -233,9 +305,9 @@ class TaskSummary(BaseModel):
     actual_hours: Optional[float] = None
     project_id: int
     author_id: Optional[int]
-    author: Optional[Author] = None
+    author: Optional[User] = None
     owner_id: Optional[int]
-    owner: Optional[Author] = None
+    owner: Optional[User] = None
     parent_task_id: Optional[int] = None
     comment_count: int = 0
     is_blocked: bool = False
@@ -281,6 +353,21 @@ class TaskProgress(BaseModel):
     completion_percentage: float
 
 
+# Kanban settings schemas
+class KanbanWipLimits(BaseModel):
+    todo: Optional[int] = None
+    in_progress: Optional[int] = 5
+    blocked: Optional[int] = None
+    review: Optional[int] = 3
+    backlog: Optional[int] = None
+    done: Optional[int] = None
+
+
+class KanbanSettings(BaseModel):
+    wip_limits: KanbanWipLimits = Field(default_factory=KanbanWipLimits)
+    hidden_columns: List[str] = Field(default_factory=lambda: ["backlog", "done"])
+
+
 # Project schemas
 class ProjectBase(BaseModel):
     name: str
@@ -288,7 +375,9 @@ class ProjectBase(BaseModel):
 
 
 class ProjectCreate(ProjectBase):
-    author_id: Optional[int] = None
+    # Note: author_id is automatically set to current user by backend
+    # Not accepted from client to prevent privilege confusion
+    pass
 
 
 class ProjectUpdate(BaseModel):
@@ -299,7 +388,8 @@ class ProjectUpdate(BaseModel):
 class Project(ProjectBase):
     id: int
     author_id: Optional[int]
-    author: Optional[Author] = None
+    author: Optional[User] = None
+    kanban_settings: Optional[KanbanSettings] = None
     created_at: datetime
     updated_at: datetime
 
@@ -333,7 +423,7 @@ class ProjectStats(BaseModel):
 
 # Bulk operation schemas
 class BulkOperationError(BaseModel):
-    task_id: int
+    task_id: Optional[int]  # None for operation-level errors (permissions, validation)
     error: str
     error_code: str  # NOT_FOUND, BLOCKED, INCOMPLETE_SUBTASKS, etc.
 
@@ -353,7 +443,6 @@ class BulkTaskUpdate(BaseModel):
 
 class BulkTakeOwnership(BaseModel):
     task_ids: List[int]
-    author_id: int
     force: bool = False
 
 

@@ -140,14 +140,84 @@ export function isOverdue(task: Task): boolean {
   return isTaskOverdue(task);
 }
 
-async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T> {
+// Get access token from localStorage
+function getAccessToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem('access_token');
+}
+
+// Clear access token and redirect to login
+function handleAuthError(): void {
+  if (typeof window === 'undefined') return;
+  localStorage.removeItem('access_token');
+  // Only redirect if not already on login page
+  if (!window.location.pathname.startsWith('/login')) {
+    window.location.href = '/login';
+  }
+}
+
+// Try to refresh access token (returns new token or null)
+async function tryRefreshToken(): Promise<string | null> {
+  console.debug('[API] Attempting token refresh');
+
+  try {
+    const response = await fetch(`${API_BASE}/api/auth/refresh`, {
+      method: 'POST',
+      credentials: 'include', // Send refresh token cookie
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      const newToken = data.access_token;
+      localStorage.setItem('access_token', newToken);
+      console.info('[API] Token refresh successful');
+      return newToken;
+    }
+
+    // Refresh failed or not implemented (501)
+    console.debug('[API] Token refresh failed:', response.status);
+    return null;
+  } catch (error) {
+    console.error('[API] Token refresh error:', error);
+    return null;
+  }
+}
+
+async function fetchApi<T>(endpoint: string, options?: RequestInit, retryCount = 0): Promise<T> {
+  // Add auth headers
+  const token = getAccessToken();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...options?.headers as Record<string, string>,
+  };
+
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
   const response = await fetch(`${API_BASE}${endpoint}`, {
     ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...options?.headers,
-    },
+    headers,
+    credentials: 'include', // Include cookies for refresh token
   });
+
+  // Handle 401 Unauthorized - try to refresh token once
+  if (response.status === 401 && retryCount === 0) {
+    console.debug('[API] Received 401, attempting token refresh');
+
+    const newToken = await tryRefreshToken();
+
+    if (newToken) {
+      // Retry the original request with new token
+      console.debug('[API] Retrying request with new token');
+      return fetchApi<T>(endpoint, options, retryCount + 1);
+    } else {
+      // Refresh failed, redirect to login
+      console.info('[API] Token refresh failed, redirecting to login');
+      handleAuthError();
+      throw new Error('Authentication required');
+    }
+  }
 
   if (!response.ok) {
     const error = await response.text();
@@ -161,21 +231,34 @@ async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T> 
   return response.json();
 }
 
-// Authors
-export const getAuthors = () => fetchApi<Author[]>('/api/authors');
-export const createAuthor = (data: { name: string; email: string }) =>
-  fetchApi<Author>('/api/authors', { method: 'POST', body: JSON.stringify(data) });
+// Users (renamed from Authors)
+export const getAuthors = () => fetchApi<Author[]>('/api/users');
+export const createAuthor = (data: { name: string; email: string; password: string }) =>
+  fetchApi<Author>('/api/users', { method: 'POST', body: JSON.stringify(data) });
+export const deleteAuthor = (id: number) =>
+  fetchApi<void>('/api/users/' + id, { method: 'DELETE' });
 
 // Projects
 export const getProjects = () => fetchApi<Project[]>('/api/projects');
 export const getProject = (id: number) => fetchApi<Project>('/api/projects/' + id);
 export const getProjectStats = (id: number) => fetchApi<ProjectStats>('/api/projects/' + id + '/stats');
-export const createProject = (data: { name: string; description?: string; author_id?: number }) =>
+export const createProject = (data: { name: string; description?: string }) =>
   fetchApi<Project>('/api/projects', { method: 'POST', body: JSON.stringify(data) });
 export const updateProject = (id: number, data: { name?: string; description?: string }) =>
   fetchApi<Project>('/api/projects/' + id, { method: 'PUT', body: JSON.stringify(data) });
 export const deleteProject = (id: number) =>
   fetchApi<void>('/api/projects/' + id, { method: 'DELETE' });
+
+// Project Members
+export interface ProjectMember {
+  id: number;
+  project_id: number;
+  user_id: number;
+  user: Author;
+  role: string;
+}
+export const getProjectMembers = (projectId: number) =>
+  fetchApi<ProjectMember[]>('/api/projects/' + projectId + '/members');
 
 // Tasks
 export const getTasks = (params?: {
@@ -211,7 +294,6 @@ export const createTask = (data: {
   description?: string;
   tag?: 'bug' | 'feature' | 'idea';
   priority?: 'P0' | 'P1';
-  author_id?: number;
   parent_task_id?: number;
   due_date?: string;
   estimated_hours?: number;
@@ -288,7 +370,7 @@ export const getProjectEvents = (projectId: number, params?: {
 
 // Comments
 export const getComments = (taskId: number) => fetchApi<Comment[]>('/api/tasks/' + taskId + '/comments');
-export const createComment = (taskId: number, data: { content: string; author_id?: number }) =>
+export const createComment = (taskId: number, data: { content: string }) =>
   fetchApi<Comment>('/api/tasks/' + taskId + '/comments', { method: 'POST', body: JSON.stringify(data) });
 export const deleteComment = (id: number) =>
   fetchApi<void>('/api/comments/' + id, { method: 'DELETE' });
@@ -298,13 +380,42 @@ export const uploadAttachment = async (taskId: number, file: File, uploadedBy?: 
   const formData = new FormData();
   formData.append('file', file);
 
+  const token = getAccessToken();
+  if (!token) {
+    throw new Error('Authentication required');
+  }
+
   const url = `${API_BASE}/api/tasks/${taskId}/attachments${uploadedBy ? `?uploaded_by=${uploadedBy}` : ''}`;
   const response = await fetch(url, {
     method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+    },
+    credentials: 'include', // Include cookies for refresh token
     body: formData,
   });
 
   if (!response.ok) {
+    // Handle 401 with token refresh
+    if (response.status === 401) {
+      console.debug('[API] Upload received 401, attempting token refresh');
+      const newToken = await tryRefreshToken();  // FIX: Use correct function name
+      if (newToken) {
+        // Retry upload with new token
+        const retryResponse = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${newToken}`,
+          },
+          credentials: 'include',
+          body: formData,
+        });
+        if (retryResponse.ok) {
+          return retryResponse.json() as Promise<Attachment>;
+        }
+      }
+    }
+
     const error = await response.json().catch(() => ({ detail: 'Upload failed' }));
     throw new Error(error.detail || 'Upload failed');
   }
@@ -349,3 +460,34 @@ export const deleteMetadata = (taskId: number, key: string, actorId?: number) =>
 
 // Stats
 export const getOverallStats = () => fetchApi<OverallStats>('/api/stats');
+
+// Kanban settings API
+export interface KanbanWipLimits {
+  todo?: number | null;
+  in_progress?: number | null;
+  blocked?: number | null;
+  review?: number | null;
+  backlog?: number | null;
+  done?: number | null;
+}
+
+export interface KanbanSettings {
+  wip_limits: KanbanWipLimits;
+  hidden_columns: string[];
+}
+
+export const getKanbanSettings = (projectId: number) =>
+  fetchApi<KanbanSettings>(`/api/projects/${projectId}/kanban-settings`);
+
+export const updateKanbanSettings = (projectId: number, settings: KanbanSettings) =>
+  fetchApi<KanbanSettings>(`/api/projects/${projectId}/kanban-settings`, {
+    method: 'PUT',
+    body: JSON.stringify(settings),
+  });
+
+// Bulk update tasks (for drag-and-drop)
+export const bulkUpdateTasks = (taskIds: number[], updates: Partial<Task>) =>
+  fetchApi<{success: boolean; processed_count: number}>('/api/tasks/bulk-update', {
+    method: 'POST',
+    body: JSON.stringify({ task_ids: taskIds, updates }),
+  });

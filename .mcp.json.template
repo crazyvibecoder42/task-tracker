@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "task-tracker": {
+      "type": "stdio",
+      "command": "python3",
+      "args": ["./mcp-server/stdio_server.py"],
+      "env": {
+        "TASK_TRACKER_API_URL": "http://localhost:6001",
+        "TASK_TRACKER_API_KEY": null,
+        "_comment": "Copy this file to .mcp.local.json and set your API key. Run: ./setup-mcp-quick.sh"
+      }
+    }
+  }
+}
