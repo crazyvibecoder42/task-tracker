@@ -1,0 +1,14 @@
+# Local Development Overrides
+# This file is used by Docker Compose automatically for local development
+# It should be committed to the repository for developer convenience
+#
+# Production deployments should NOT use this file - deploy docker-compose.yml
+# directly with proper environment variable injection
+
+version: '3.8'
+
+services:
+  backend:
+    env_file:
+      - ./backend/.env.development  # Development defaults (ENVIRONMENT=development)
+      # Optional: create ./backend/.env for local overrides (gitignored)

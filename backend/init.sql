@@ -1,10 +1,18 @@
--- Initialize the task tracker database
+-- Task Tracker Database Schema
+-- This is the complete database schema for fresh deployments.
+-- All schema changes have been consolidated into this single file.
+-- For existing databases, apply this schema using: psql -U taskuser -d tasktracker -f init.sql
 
--- Authors table
-CREATE TABLE IF NOT EXISTS authors (
+-- Users table (formerly authors, renamed in migration 006)
+CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
     email VARCHAR(255) UNIQUE NOT NULL,
+    password_hash VARCHAR(255),  -- Nullable for migrated users
+    role VARCHAR(50) NOT NULL DEFAULT 'editor' CHECK (role IN ('admin', 'editor', 'viewer')),
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    email_verified BOOLEAN NOT NULL DEFAULT false,
+    last_login_at TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -13,8 +21,16 @@ CREATE TABLE IF NOT EXISTS projects (
     id SERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
     description TEXT,
-    author_id INTEGER REFERENCES authors(id) ON DELETE SET NULL,
+    author_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     search_vector TSVECTOR,
+    kanban_settings JSONB DEFAULT '{
+        "wip_limits": {
+            "todo": null,
+            "in_progress": 5,
+            "review": 3
+        },
+        "hidden_columns": ["backlog", "done"]
+    }'::jsonb,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -37,8 +53,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     priority task_priority NOT NULL DEFAULT 'P1',
     status task_status NOT NULL DEFAULT 'backlog',
     project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    author_id INTEGER REFERENCES authors(id) ON DELETE SET NULL,
-    owner_id INTEGER REFERENCES authors(id) ON DELETE SET NULL,
+    author_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    owner_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     parent_task_id INTEGER REFERENCES tasks(id) ON DELETE CASCADE,
     search_vector TSVECTOR,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -57,7 +73,7 @@ CREATE TABLE IF NOT EXISTS comments (
     id SERIAL PRIMARY KEY,
     content TEXT NOT NULL,
     task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-    author_id INTEGER REFERENCES authors(id) ON DELETE SET NULL,
+    author_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     search_vector TSVECTOR,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -82,7 +98,7 @@ CREATE TABLE IF NOT EXISTS task_attachments (
     filepath VARCHAR(512) NOT NULL,
     mime_type VARCHAR(100) NOT NULL,
     file_size BIGINT NOT NULL,
-    uploaded_by INTEGER REFERENCES authors(id) ON DELETE SET NULL,
+    uploaded_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -94,9 +110,45 @@ CREATE TABLE IF NOT EXISTS task_events (
     field_name VARCHAR(100),
     old_value TEXT,
     new_value TEXT,
-    actor_id INTEGER REFERENCES authors(id) ON DELETE SET NULL,
+    actor_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     metadata JSONB DEFAULT '{}'::jsonb
+);
+
+-- Project members table for project-level permissions
+CREATE TABLE IF NOT EXISTS project_members (
+    id SERIAL PRIMARY KEY,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role VARCHAR(50) NOT NULL DEFAULT 'editor' CHECK (role IN ('owner', 'editor', 'viewer')),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(project_id, user_id)
+);
+
+-- API keys table for programmatic access
+CREATE TABLE IF NOT EXISTS api_keys (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    key_hash VARCHAR(255) NOT NULL UNIQUE,
+    name VARCHAR(255) NOT NULL,
+    project_ids JSONB DEFAULT '[]',
+    permissions JSONB DEFAULT '[]',
+    rate_limit INTEGER,
+    expires_at TIMESTAMP WITH TIME ZONE,
+    last_used_at TIMESTAMP WITH TIME ZONE,
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Refresh tokens table for JWT token management
+CREATE TABLE IF NOT EXISTS refresh_tokens (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_jti VARCHAR(255) NOT NULL UNIQUE,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    is_revoked BOOLEAN NOT NULL DEFAULT false,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
 -- ============== Full-Text Search Setup ==============
@@ -150,7 +202,17 @@ BEFORE INSERT OR UPDATE ON comments
 FOR EACH ROW
 EXECUTE FUNCTION comments_search_vector_update();
 
--- Create indexes for better query performance
+-- ============== Indexes for Performance ==============
+
+-- User indexes
+CREATE INDEX idx_users_email ON users(email);
+CREATE INDEX idx_users_role ON users(role);
+
+-- Project indexes
+CREATE INDEX idx_projects_author_id ON projects(author_id);
+CREATE INDEX idx_projects_search_vector ON projects USING GIN (search_vector);
+CREATE INDEX idx_projects_kanban_settings ON projects USING GIN (kanban_settings);
+
 -- Task indexes
 CREATE INDEX idx_tasks_project_id ON tasks(project_id);
 CREATE INDEX idx_tasks_status ON tasks(status);
@@ -166,11 +228,9 @@ CREATE INDEX idx_tasks_search_vector ON tasks USING GIN (search_vector);
 CREATE INDEX idx_tasks_external_links ON tasks USING GIN (external_links);
 CREATE INDEX idx_tasks_custom_metadata ON tasks USING GIN (custom_metadata);
 
--- Project indexes
-CREATE INDEX idx_projects_search_vector ON projects USING GIN (search_vector);
-
 -- Comment indexes
 CREATE INDEX idx_comments_task_id ON comments(task_id);
+CREATE INDEX idx_comments_author_id ON comments(author_id);
 CREATE INDEX idx_comments_search_vector ON comments USING GIN (search_vector);
 
 -- Task dependency indexes
@@ -179,6 +239,7 @@ CREATE INDEX idx_task_dependencies_blocked ON task_dependencies(blocked_task_id)
 
 -- Task attachment indexes
 CREATE INDEX idx_task_attachments_task_id ON task_attachments(task_id);
+CREATE INDEX idx_task_attachments_uploaded_by ON task_attachments(uploaded_by);
 
 -- Task event indexes
 CREATE INDEX idx_task_events_task_id ON task_events(task_id);
@@ -187,20 +248,25 @@ CREATE INDEX idx_task_events_event_type ON task_events(event_type);
 CREATE INDEX idx_task_events_actor_id ON task_events(actor_id);
 CREATE INDEX idx_task_events_created_at ON task_events(created_at DESC);
 
--- Insert a default author for testing
-INSERT INTO authors (name, email) VALUES ('Admin', 'admin@example.com');
+-- Project member indexes
+CREATE INDEX idx_project_members_project_id ON project_members(project_id);
+CREATE INDEX idx_project_members_user_id ON project_members(user_id);
 
--- Insert a sample project
-INSERT INTO projects (name, description, author_id)
-VALUES ('Sample Project', 'A sample project to get started', 1);
+-- API key indexes
+CREATE INDEX idx_api_keys_user_id ON api_keys(user_id);
+CREATE INDEX idx_api_keys_key_hash ON api_keys(key_hash);
 
--- Insert sample tasks
-INSERT INTO tasks (title, description, tag, priority, status, project_id, author_id)
-VALUES
-    ('Set up CI/CD pipeline', 'Configure GitHub Actions for automated testing and deployment', 'feature', 'P0', 'todo', 1, 1),
-    ('Fix login redirect bug', 'Users are not redirected properly after login', 'bug', 'P0', 'todo', 1, 1),
-    ('Add dark mode support', 'Implement dark mode toggle in settings', 'idea', 'P1', 'backlog', 1, 1);
+-- Refresh token indexes
+CREATE INDEX idx_refresh_tokens_user_id ON refresh_tokens(user_id);
+CREATE INDEX idx_refresh_tokens_token_jti ON refresh_tokens(token_jti);
+CREATE INDEX idx_refresh_tokens_expires_at ON refresh_tokens(expires_at);
 
--- Insert a sample comment
-INSERT INTO comments (content, task_id, author_id)
-VALUES ('This is a high priority item, need to address ASAP', 1, 1);
+-- ============== Sample Data ==============
+
+-- Note: Admin user is now created by backend startup event (main.py)
+-- This ensures the password can be configured via ADMIN_PASSWORD env var
+-- Default: admin@example.com / admin123 (for local dev only)
+-- Production: Set ADMIN_PASSWORD env var to use custom password
+
+-- Note: Sample data (projects, tasks, comments) is now created by backend startup event
+-- This ensures proper foreign key relationships after admin user creation

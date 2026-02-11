@@ -17,6 +17,31 @@ from mcp.types import Tool, TextContent
 
 # Configuration
 API_BASE_URL = os.getenv("TASK_TRACKER_API_URL", "http://localhost:6001")
+API_KEY = os.getenv("TASK_TRACKER_API_KEY")
+
+
+def validate_api_key():
+    """
+    Validate API key configuration.
+
+    Raises SystemExit if API key is missing, invalid, or incorrectly formatted.
+    This validation is deferred to runtime (not import time) to allow module
+    imports for testing and tooling.
+    """
+    import sys
+
+    # Validate API key is not a placeholder or invalid format
+    INVALID_KEYS = ["SET_YOUR_API_KEY_HERE", "YOUR_API_KEY", "PLACEHOLDER", "", "null", "None", "undefined"]
+    if not API_KEY or API_KEY in INVALID_KEYS:
+        print("ERROR: Invalid or missing TASK_TRACKER_API_KEY", file=sys.stderr)
+        print("Run: ./setup-mcp-quick.sh to configure", file=sys.stderr)
+        sys.exit(1)
+
+    # Validate API key format (must start with ttk_)
+    if not API_KEY.startswith("ttk_"):
+        print("ERROR: Invalid TASK_TRACKER_API_KEY format. Must start with 'ttk_'", file=sys.stderr)
+        print("Run: ./setup-mcp-quick.sh to generate a valid API key", file=sys.stderr)
+        sys.exit(1)
 
 # Initialize MCP server
 server = Server("task-tracker")
@@ -28,7 +53,10 @@ http_client: Optional[httpx.AsyncClient] = None
 async def get_client() -> httpx.AsyncClient:
     global http_client
     if http_client is None:
-        http_client = httpx.AsyncClient(base_url=API_BASE_URL, timeout=30.0)
+        headers = {}
+        if API_KEY:
+            headers["X-API-Key"] = API_KEY
+        http_client = httpx.AsyncClient(base_url=API_BASE_URL, timeout=30.0, headers=headers)
     return http_client
 
 
@@ -171,12 +199,11 @@ async def list_tools() -> list[Tool]:
              inputSchema={"type": "object", "properties": {
                  "task_id": {"type": "integer", "description": "Task ID"}
              }, "required": ["task_id"]}),
-        Tool(name="take_ownership", description="Take ownership of a task. Optionally force reassignment if already owned.",
+        Tool(name="take_ownership", description="Take ownership of a task. Assigns ownership to the authenticated user. Optionally force reassignment if already owned.",
              inputSchema={"type": "object", "properties": {
                  "task_id": {"type": "integer", "description": "Task ID"},
-                 "author_id": {"type": "integer", "description": "Author ID to assign as owner"},
                  "force": {"type": "boolean", "description": "Force reassignment if already owned (default: false)"}
-             }, "required": ["task_id", "author_id"]}),
+             }, "required": ["task_id"]}),
         Tool(name="delete_task", description="Delete a task",
              inputSchema={"type": "object", "properties": {
                  "task_id": {"type": "integer", "description": "Task ID"}
@@ -195,13 +222,11 @@ async def list_tools() -> list[Tool]:
              inputSchema={"type": "object", "properties": {
                  "comment_id": {"type": "integer", "description": "Comment ID"}
              }, "required": ["comment_id"]}),
-        Tool(name="list_authors", description="List all authors/users",
+        Tool(name="list_users", description="List all users (admin only). Returns users with role, email, and activity status.",
              inputSchema={"type": "object", "properties": {}, "required": []}),
-        Tool(name="create_author", description="Create a new author/user",
-             inputSchema={"type": "object", "properties": {
-                 "name": {"type": "string", "description": "Author name"},
-                 "email": {"type": "string", "description": "Author email"}
-             }, "required": ["name", "email"]}),
+        Tool(name="list_authors", description="DEPRECATED: Use list_users instead. Alias for backward compatibility.",
+             inputSchema={"type": "object", "properties": {}, "required": []}),
+        # Note: create_author removed - use admin UI or /api/auth/register for user creation
         Tool(name="get_stats", description="Get overall task tracker statistics",
              inputSchema={"type": "object", "properties": {}, "required": []}),
         Tool(name="get_task_events", description="Get timeline of events for a task with optional filtering",
@@ -232,12 +257,11 @@ async def list_tools() -> list[Tool]:
                  }, "description": "Fields to update (all optional)"},
                  "actor_id": {"type": "integer", "description": "Actor ID for event tracking (optional)"}
              }, "required": ["task_ids", "updates"]}),
-        Tool(name="bulk_take_ownership", description="Take ownership of multiple tasks at once",
+        Tool(name="bulk_take_ownership", description="Take ownership of multiple tasks at once. Assigns ownership to the authenticated user.",
              inputSchema={"type": "object", "properties": {
                  "task_ids": {"type": "array", "items": {"type": "integer"}, "description": "List of task IDs to claim"},
-                 "author_id": {"type": "integer", "description": "Author ID to assign as owner"},
                  "force": {"type": "boolean", "description": "Force reassignment if already owned (default: false)"}
-             }, "required": ["task_ids", "author_id"]}),
+             }, "required": ["task_ids"]}),
         Tool(name="bulk_delete_tasks", description="Delete multiple tasks in a single transaction (cascades to subtasks)",
              inputSchema={"type": "object", "properties": {
                  "task_ids": {"type": "array", "items": {"type": "integer"}, "description": "List of task IDs to delete"},
@@ -394,7 +418,7 @@ Example: list_actionable_tasks(project_id=4, priority='P0', limit=10)"""
     elif name == "complete_task":
         result = await api_request("PUT", f"/api/tasks/{arguments['task_id']}", {"status": "done"})
     elif name == "take_ownership":
-        data = {"author_id": arguments["author_id"], "force": arguments.get("force", False)}
+        data = {"force": arguments.get("force", False)}
         result = await api_request("POST", f"/api/tasks/{arguments['task_id']}/take-ownership", data)
     elif name == "delete_task":
         result = await api_request("DELETE", f"/api/tasks/{arguments['task_id']}")
@@ -406,10 +430,14 @@ Example: list_actionable_tasks(project_id=4, priority='P0', limit=10)"""
         result = await api_request("POST", f"/api/tasks/{arguments['task_id']}/comments", data)
     elif name == "delete_comment":
         result = await api_request("DELETE", f"/api/comments/{arguments['comment_id']}")
+    elif name == "list_users":
+        result = await api_request("GET", "/api/users")
     elif name == "list_authors":
-        result = await api_request("GET", "/api/authors")
-    elif name == "create_author":
-        result = await api_request("POST", "/api/authors", {"name": arguments["name"], "email": arguments["email"]})
+        # Backward compatibility alias - returns original array shape
+        # Deprecation warning logged to stderr (not in response to preserve API contract)
+        import sys
+        print("WARNING: list_authors is deprecated, use list_users instead", file=sys.stderr)
+        result = await api_request("GET", "/api/users")
     elif name == "get_stats":
         result = await api_request("GET", "/api/stats")
     elif name == "get_task_events":
@@ -436,7 +464,7 @@ Example: list_actionable_tasks(project_id=4, priority='P0', limit=10)"""
             data["actor_id"] = arguments["actor_id"]
         result = await api_request("POST", "/api/tasks/bulk-update", data)
     elif name == "bulk_take_ownership":
-        data = {"task_ids": arguments["task_ids"], "author_id": arguments["author_id"]}
+        data = {"task_ids": arguments["task_ids"]}
         if "force" in arguments:
             data["force"] = arguments["force"]
         result = await api_request("POST", "/api/tasks/bulk-take-ownership", data)
@@ -462,6 +490,9 @@ Example: list_actionable_tasks(project_id=4, priority='P0', limit=10)"""
 
 
 async def main():
+    # Validate API key before starting server
+    validate_api_key()
+
     async with stdio_server() as (read_stream, write_stream):
         await server.run(read_stream, write_stream, server.create_initialization_options())
 

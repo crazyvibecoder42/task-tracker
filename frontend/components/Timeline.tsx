@@ -93,7 +93,7 @@ export default function Timeline({ taskId, projectId, limit = 20, showFilters = 
         ...(selectedEventType && { event_type: selectedEventType })
       };
 
-      let result;
+      let result: { events: any[]; total_count: number };
       if (taskId) {
         result = await getTaskEvents(taskId, params);
       } else if (projectId) {

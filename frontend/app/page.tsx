@@ -6,8 +6,10 @@ import { AlertCircle, Clock, FolderKanban, TrendingUp, Inbox, Circle, PlayCircle
 import { getOverallStats, getProjects, getTasks, getOverdueTasks, getUpcomingTasks, OverallStats, Project, Task } from '@/lib/api';
 import { STATUS_CONFIG } from '@/components/StatusConfig';
 import { formatDistanceToNow } from 'date-fns';
+import { useAuth } from '@/contexts/AuthContext';
 
 export default function Dashboard() {
+  const { isAuthenticated, loading: authLoading } = useAuth();
   const [stats, setStats] = useState<OverallStats | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [recentTasks, setRecentTasks] = useState<Task[]>([]);
@@ -16,8 +18,16 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    loadData();
-  }, []);
+    // CRITICAL: Only load data if user is authenticated
+    // This prevents API calls during logout/redirect
+    if (isAuthenticated && !authLoading) {
+      loadData();
+    } else if (!authLoading && !isAuthenticated) {
+      // Not authenticated - redirect to login
+      // This handles cases where middleware let through stale/invalid tokens
+      window.location.href = '/login';
+    }
+  }, [isAuthenticated, authLoading]);
 
   const loadData = async () => {
     try {

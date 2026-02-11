@@ -24,6 +24,8 @@ services:
     container_name: task-tracker-backend
     ports:
       - "6001:6001"
+    # IMPORTANT: For production, set ENVIRONMENT and JWT_SECRET_KEY via environment variables
+    # For local development, use docker-compose.override.yml to load .env.development
     environment:
       DATABASE_URL: postgresql://taskuser:taskpass@postgres:5432/tasktracker
     depends_on:
@@ -32,7 +34,7 @@ services:
     volumes:
       - ./backend:/app
       - ./uploads:/app/uploads
-    command: uvicorn main:app --host 0.0.0.0 --port 6001 --reload --limit-max-request-size 52428800
+    command: uvicorn main:app --host 0.0.0.0 --port 6001 --reload
 
   frontend:
     build: ./frontend

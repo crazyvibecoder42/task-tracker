@@ -14,7 +14,7 @@ import {
   closestCorners
 } from '@dnd-kit/core';
 import { sortableKeyboardCoordinates } from '@dnd-kit/sortable';
-import { Task, Author, getProject, updateTask, getKanbanSettings, getAuthors, KanbanSettings } from '@/lib/api';
+import { Task, Author, getProject, updateTask, getKanbanSettings, getProjectMembers, KanbanSettings } from '@/lib/api';
 import { groupTasks, getColumnLabel, GroupingType, STATUS_ORDER } from '@/lib/kanban-utils';
 import KanbanColumn from '@/components/KanbanColumn';
 import KanbanCard from '@/components/KanbanCard';
@@ -83,10 +83,11 @@ export default function KanbanBoardPage() {
   const loadData = async () => {
     try {
       log('DEBUG', 'Loading project data', { projectId });
-      const [data, authorsData] = await Promise.all([
+      const [data, membersData] = await Promise.all([
         getProject(projectId),
-        getAuthors()
+        getProjectMembers(projectId)
       ]);
+      const authorsData = membersData.map(m => m.user);
       log('INFO', 'Project data loaded successfully', {
         taskCount: data.tasks?.length || 0,
         projectName: data.name,

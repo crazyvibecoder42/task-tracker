@@ -4,6 +4,49 @@
 
 This repository contains the Task Tracker application with enhanced features for AI agent task management, including hierarchical subtasks and task dependencies.
 
+## Authentication
+
+The task tracker backend requires authentication for all API endpoints. Two authentication methods are supported:
+
+1. **JWT Bearer Token** - For web UI (login via `/api/auth/login`)
+2. **API Key** - For MCP server and programmatic access (sent via `X-API-Key` header)
+
+### Admin Credentials (Fresh Deployments)
+- **Email:** `admin@example.com`
+- **Password:** `admin123` (default password - **CHANGE ON FIRST LOGIN IN PRODUCTION**)
+- **User ID:** `1`
+- **Role:** `admin`
+
+**Note:** Fresh deployments from `init.sql` will seed this admin account with the default password. For production use, change this password immediately after first login.
+
+### MCP Server Configuration
+The MCP server is configured via `.mcp.local.json` (gitignored) with the following environment variables:
+- `TASK_TRACKER_API_URL`: Backend URL (http://localhost:6001)
+- `TASK_TRACKER_API_KEY`: API key for authentication (format: `ttk_live_<random>`)
+- `TASK_TRACKER_USER_ID`: User ID (1 for admin/aman)
+
+### Creating New API Keys
+To create a new API key for the MCP server:
+
+1. Login to get an access token:
+   ```bash
+   curl -X POST http://localhost:6001/api/auth/login \
+     -H "Content-Type: application/json" \
+     -d '{"email":"admin@example.com","password":"admin123"}'
+   ```
+
+2. Use the access token to create an API key:
+   ```bash
+   curl -X POST http://localhost:6001/api/auth/api-keys \
+     -H "Content-Type: application/json" \
+     -H "Authorization: Bearer <access_token>" \
+     -d '{"name":"MCP Server Key","expires_days":365}'
+   ```
+
+3. Update `.mcp.local.json` with the new key and restart Claude Code.
+
+**Note:** After updating `.mcp.local.json`, you must restart Claude Code for changes to take effect.
+
 ## Persona Configuration
 
 **Author/Owner ID:** `aman`
@@ -13,7 +56,6 @@ This repository contains the Task Tracker application with enhanced features for
 When interacting with the task-tracker backend API (http://localhost:6001), always use `author_id: 1` (aman) for:
 - Creating tasks (`POST /api/tasks`)
 - Creating comments (`POST /api/tasks/{id}/comments`)
-- Taking ownership of tasks (`POST /api/tasks/{id}/take-ownership`)
 
 ## Task Workflow
 
@@ -22,16 +64,19 @@ When interacting with the task-tracker backend API (http://localhost:6001), alwa
 **IMPORTANT:** Always take ownership of a task before starting work on it:
 
 ```bash
-# Take ownership of a task
+# Take ownership of a task (assigns to authenticated user)
 curl -X POST http://localhost:6001/api/tasks/{task_id}/take-ownership \
+  -H "X-API-Key: $API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"author_id": 1}'
+  -d '{"force": false}'
 ```
 
 Or use the MCP tool:
 ```
-mcp__task-tracker__take_ownership(task_id, author_id=1)
+mcp__task-tracker__take_ownership(task_id, force=False)
 ```
+
+**Note:** Ownership is always assigned to the authenticated user. This prevents privilege escalation.
 
 ### Task Management Guidelines
 
@@ -113,6 +158,8 @@ mcp__task-tracker__take_ownership(task_id, author_id=1)
   - Red progress bar when over budget (actual > estimated)
 
 ## Database Schema
+
+**Schema Management:** The complete database schema is defined in `backend/init.sql`, which serves as the single source of truth for fresh deployments. All schema enhancements (full-text search, time tracking, rich context, Kanban settings, and authentication) have been consolidated into this file. There are no migration files—the application is designed for fresh deployments via Docker Compose initialization.
 
 ### Tasks Table
 - `parent_task_id`: References parent task for subtasks (nullable)
@@ -199,6 +246,132 @@ mcp__task-tracker__take_ownership(task_id, author_id=1)
 - Tasks without due_date are excluded from overdue/upcoming queries
 - Date filters expect ISO 8601 datetime format (e.g., `2026-02-01T00:00:00Z`)
 
+## Agent Teams for Coding
+
+### When to Delegate to Specialized Agents
+
+**IMPORTANT:** For any non-trivial coding task, delegate to specialized agents using the Task tool. This ensures focused expertise, better code quality, and maintains conversation context efficiency.
+
+### Backend Development (Python/FastAPI)
+
+**Use `backend-code-writer` agent for:**
+- Implementing new API endpoints
+- Adding business logic and validation
+- Database operations and ORM queries
+- Backend bug fixes and refactoring
+- Writing backend tests
+
+**Example:**
+```
+Task(
+  subagent_type="backend-code-writer",
+  description="Add dependency endpoints",
+  prompt="Implement POST /api/tasks/{id}/dependencies endpoint with circular dependency validation"
+)
+```
+
+### Frontend Development (React/Next.js)
+
+**Use `frontend-code-writer` agent for:**
+- Creating or modifying React components
+- Implementing UI features and interactions
+- API integration from frontend
+- State management
+- Frontend bug fixes
+- Using Playwright for flow testing
+
+**Example:**
+```
+Task(
+  subagent_type="frontend-code-writer",
+  description="Update task detail page",
+  prompt="Add dependency visualization to the task detail page, showing blocking and blocked tasks"
+)
+```
+
+### End-to-End Testing
+
+**Use `e2e-flow-tester` agent for:**
+- Verifying complete user journeys after implementation
+- Testing multi-step workflows (create task → assign → complete)
+- Integration testing across frontend and backend
+- Testing after frontend changes are deployed
+
+**Example:**
+```
+Task(
+  subagent_type="e2e-flow-tester",
+  description="Test dependency workflow",
+  prompt="Verify the complete flow: create two tasks, add dependency relationship, attempt to complete blocked task (should fail), complete blocking task, then complete blocked task (should succeed)"
+)
+```
+
+### API Testing
+
+**Use `curl-api-tester` agent for:**
+- Testing API endpoints after backend changes
+- Verifying request/response formats
+- Testing edge cases and validation
+- Quick endpoint verification without writing code
+
+**Example:**
+```
+Task(
+  subagent_type="curl-api-tester",
+  description="Test dependency endpoints",
+  prompt="Test the new dependency endpoints: create dependency, verify it appears in GET /api/tasks/{id}/dependencies, delete it"
+)
+```
+
+### Debugging and Root Cause Analysis
+
+**Use `root-cause-analyzer` agent for:**
+- Investigating failing tests
+- Diagnosing API errors or 500s
+- Analyzing performance issues
+- Understanding why features aren't working as expected
+
+**Example:**
+```
+Task(
+  subagent_type="root-cause-analyzer",
+  description="Debug circular dependency check",
+  prompt="The circular dependency validation is allowing some circular paths. Investigate why the BFS algorithm isn't catching all cases."
+)
+```
+
+### Code Review
+
+**Use `superpowers:code-reviewer` agent for:**
+- Reviewing completed implementations
+- Validating against requirements
+- Checking for security vulnerabilities
+- Ensuring code quality and best practices
+
+**Example:**
+```
+Skill(skill="superpowers:requesting-code-review")
+```
+
+### Best Practices
+
+1. **Delegate Early:** Use agents for any implementation task beyond 5-10 lines of code
+2. **Be Specific:** Provide clear context, requirements, and acceptance criteria
+3. **Sequential Tasks:** Use agents in sequence (backend → testing → frontend → e2e)
+4. **Parallel Tasks:** Launch multiple agents concurrently for independent work
+5. **Context Preservation:** Agents keep the main conversation clean and focused
+6. **Verification:** Always test with appropriate agent after making changes
+
+### Agent Workflow Example
+
+For a new feature like "Add task dependencies":
+
+1. **Backend:** `backend-code-writer` implements API endpoints
+2. **API Test:** `curl-api-tester` verifies endpoints work
+3. **Frontend:** `frontend-code-writer` adds UI for dependencies
+4. **E2E Test:** `e2e-flow-tester` validates complete user flow
+5. **Review:** `superpowers:code-reviewer` checks implementation quality
+
 ## Development Workflow
 
 ### Running the Application
@@ -224,6 +397,8 @@ SELECT id, title, status, parent_task_id, project_id FROM tasks;
 # View dependencies
 SELECT blocking_task_id, blocked_task_id FROM task_dependencies;
 ```
+
+**Fresh Database Setup:** Docker Compose automatically initializes the database using `backend/init.sql` on first run. To reset the database, use `docker-compose down -v` to remove volumes, then `docker-compose up -d` to recreate with fresh schema.
 
 ### Testing
 ```bash

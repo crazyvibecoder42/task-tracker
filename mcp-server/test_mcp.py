@@ -31,26 +31,8 @@ async def test_mcp_server():
         print(f"❌ FAILED: {e}")
         tests_failed += 1
 
-    # Test 2: Create a new author
-    print("\n[TEST 2] Creating a new author...")
-    try:
-        result = await call_tool("create_author", {
-            "name": "MCP Test User",
-            "email": "mcp.test@example.com"
-        })
-        data = json.loads(result[0].text)
-        if "error" in data:
-            print(f"❌ FAILED: {data['error']}")
-            tests_failed += 1
-        else:
-            print(f"✅ SUCCESS: Created author ID {data['id']}")
-            tests_passed += 1
-    except Exception as e:
-        print(f"❌ FAILED: {e}")
-        tests_failed += 1
-
-    # Test 3: List Projects
-    print("\n[TEST 3] Listing all projects...")
+    # Test 2: List Projects (create_author removed - use admin UI or /api/auth/register)
+    print("\n[TEST 2] Listing all projects...")
     try:
         result = await call_tool("list_projects", {})
         data = json.loads(result[0].text)
@@ -66,25 +48,30 @@ async def test_mcp_server():
         print(f"❌ FAILED: {e}")
         tests_failed += 1
 
-    # Test 4: List Tasks
-    print("\n[TEST 4] Listing all tasks...")
+    # Test 3: List Tasks (requires project_id - use project 1 from sample data)
+    print("\n[TEST 3] Listing tasks in project 1...")
     try:
-        result = await call_tool("list_tasks", {})
+        result = await call_tool("list_tasks", {"project_id": 1})
         data = json.loads(result[0].text)
-        if "error" in data:
+        # API returns a list directly, not {"tasks": [...]}
+        if isinstance(data, dict) and "error" in data:
             print(f"❌ FAILED: {data['error']}")
             tests_failed += 1
-        else:
-            print(f"✅ SUCCESS: Found {len(data)} tasks")
-            for task in data:
+        elif isinstance(data, list):
+            tasks = data
+            print(f"✅ SUCCESS: Found {len(tasks)} tasks")
+            for task in tasks:
                 print(f"   - [{task['priority']}] {task['title']} ({task['status']})")
             tests_passed += 1
+        else:
+            print(f"❌ FAILED: Unexpected response type: {type(data)}")
+            tests_failed += 1
     except Exception as e:
         print(f"❌ FAILED: {e}")
         tests_failed += 1
 
-    # Test 5: Get Overall Stats
-    print("\n[TEST 5] Getting overall statistics...")
+    # Test 4: Get Overall Stats
+    print("\n[TEST 4] Getting overall statistics...")
     try:
         result = await call_tool("get_stats", {})
         data = json.loads(result[0].text)

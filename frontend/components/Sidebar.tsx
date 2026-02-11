@@ -3,11 +3,14 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { FolderKanban, LayoutDashboard, ListTodo, Plus, Users } from 'lucide-react';
+import { FolderKanban, Grid3x3, LayoutDashboard, ListTodo, Plus, Users } from 'lucide-react';
 import { getProjects, Project } from '@/lib/api';
+import UserMenu from '@/components/UserMenu';
+import { useAuth } from '@/contexts/AuthContext';
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const { hasRole } = useAuth();
   const [projects, setProjects] = useState<Project[]>([]);
 
   useEffect(() => {
@@ -60,16 +63,31 @@ export default function Sidebar() {
         </Link>
 
         <Link
-          href="/authors"
+          href="/kanban"
           className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-            isActive('/authors')
+            pathname === '/kanban' || pathname?.startsWith('/projects/') && pathname?.includes('/board')
               ? 'bg-indigo-50 text-indigo-600'
               : 'text-gray-700 hover:bg-gray-100'
           }`}
         >
-          <Users className="w-4 h-4" />
-          Authors
+          <Grid3x3 className="w-4 h-4" />
+          Kanban Board
         </Link>
+
+        {/* Admin-only: Authors/Users Management */}
+        {hasRole('admin') && (
+          <Link
+            href="/authors"
+            className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+              isActive('/authors')
+                ? 'bg-indigo-50 text-indigo-600'
+                : 'text-gray-700 hover:bg-gray-100'
+            }`}
+          >
+            <Users className="w-4 h-4" />
+            Authors
+          </Link>
+        )}
 
         <div className="pt-4">
           <div className="flex items-center justify-between px-3 mb-2">
@@ -108,11 +126,7 @@ export default function Sidebar() {
         </div>
       </nav>
 
-      <div className="p-4 border-t border-gray-200">
-        <p className="text-xs text-gray-500 text-center">
-          Task Tracker v1.0
-        </p>
-      </div>
+      <UserMenu />
     </aside>
   );
 }

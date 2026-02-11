@@ -249,7 +249,9 @@ export default function TasksPage() {
                   <div className="flex items-center gap-3 mb-1">
                     <span className="font-mono text-sm text-gray-500">#{task.id}</span>
                     {isOverdue(task) && (
-                      <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0" title="Overdue" />
+                      <span title="Overdue">
+                        <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0" />
+                      </span>
                     )}
                     <Link
                       href={`/tasks/${task.id}`}

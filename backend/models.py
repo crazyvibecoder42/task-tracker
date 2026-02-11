@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime, Enum, Numeric
+from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime, Enum, Numeric, Boolean
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
@@ -41,13 +41,20 @@ class TaskStatus(str, enum.Enum):
     done = "done"
 
 
-class Author(Base):
-    __tablename__ = "authors"
+class User(Base):
+    __tablename__ = "users"  # Renamed from authors in migration 006
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), nullable=False)
     email = Column(String(255), unique=True, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Auth fields (added in migration 006)
+    password_hash = Column(String(255), nullable=True)  # Nullable for migrated users
+    role = Column(String(50), nullable=False, server_default="editor")
+    is_active = Column(Boolean, nullable=False, server_default="true")
+    email_verified = Column(Boolean, nullable=False, server_default="false")
+    last_login_at = Column(DateTime(timezone=True), nullable=True)
 
     # Relationships
     projects = relationship("Project", back_populates="author")
@@ -55,6 +62,9 @@ class Author(Base):
     owned_tasks = relationship("Task", foreign_keys="Task.owner_id", back_populates="owner")
     comments = relationship("Comment", back_populates="author")
     events = relationship("TaskEvent", back_populates="actor")
+    project_memberships = relationship("ProjectMember", back_populates="user")
+    api_keys = relationship("ApiKey", back_populates="user")
+    refresh_tokens = relationship("RefreshToken", back_populates="user")
 
 
 class Project(Base):
@@ -63,13 +73,14 @@ class Project(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), nullable=False)
     description = Column(Text)
-    author_id = Column(Integer, ForeignKey("authors.id", ondelete="SET NULL"))
+    author_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
     search_vector = Column(TSVECTOR)
+    kanban_settings = Column(JSONB, default=dict)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     # Relationships
-    author = relationship("Author", back_populates="projects")
+    author = relationship("User", back_populates="projects")
     tasks = relationship("Task", back_populates="project", cascade="all, delete-orphan")
 
 
@@ -83,8 +94,8 @@ class Task(Base):
     priority = Column(Enum(TaskPriority, name="task_priority", create_type=False), nullable=False, default=TaskPriority.P1)
     status = Column(Enum(TaskStatus, name="task_status", create_type=False), nullable=False, default=TaskStatus.backlog)
     project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
-    author_id = Column(Integer, ForeignKey("authors.id", ondelete="SET NULL"))
-    owner_id = Column(Integer, ForeignKey("authors.id", ondelete="SET NULL"))
+    author_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
     parent_task_id = Column(Integer, ForeignKey("tasks.id", ondelete="CASCADE"))
     search_vector = Column(TSVECTOR)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -101,8 +112,8 @@ class Task(Base):
 
     # Relationships
     project = relationship("Project", back_populates="tasks")
-    author = relationship("Author", foreign_keys=[author_id], back_populates="tasks")
-    owner = relationship("Author", foreign_keys=[owner_id], back_populates="owned_tasks")
+    author = relationship("User", foreign_keys=[author_id], back_populates="tasks")
+    owner = relationship("User", foreign_keys=[owner_id], back_populates="owned_tasks")
     comments = relationship("Comment", back_populates="task", cascade="all, delete-orphan")
 
     # Subtask relationships (self-referential)
@@ -154,7 +165,7 @@ class TaskEvent(Base):
     # Python TaskEventType enum provides validation layer for known types,
     # but the database may contain additional custom event types.
     event_type = Column(String(50), nullable=False)
-    actor_id = Column(Integer, ForeignKey("authors.id", ondelete="SET NULL"))
+    actor_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
     field_name = Column(String(255))
     old_value = Column(Text)
     new_value = Column(Text)
@@ -163,7 +174,7 @@ class TaskEvent(Base):
 
     # Relationships
     task = relationship("Task", back_populates="events")
-    actor = relationship("Author", back_populates="events")
+    actor = relationship("User", back_populates="events")
 
 
 class TaskAttachment(Base):
@@ -176,12 +187,12 @@ class TaskAttachment(Base):
     filepath = Column(String(512), nullable=False)
     mime_type = Column(String(100), nullable=False)
     file_size = Column(Integer, nullable=False)
-    uploaded_by = Column(Integer, ForeignKey("authors.id", ondelete="SET NULL"))
+    uploaded_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships
     task = relationship("Task", back_populates="attachments")
-    uploader = relationship("Author")
+    uploader = relationship("User")
 
 
 class Comment(Base):
@@ -190,11 +201,84 @@ class Comment(Base):
     id = Column(Integer, primary_key=True, index=True)
     content = Column(Text, nullable=False)
     task_id = Column(Integer, ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False)
-    author_id = Column(Integer, ForeignKey("authors.id", ondelete="SET NULL"))
+    author_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
     search_vector = Column(TSVECTOR)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     # Relationships
     task = relationship("Task", back_populates="comments")
-    author = relationship("Author", back_populates="comments")
+    author = relationship("User", back_populates="comments")
+
+
+class ProjectMember(Base):
+    """
+    Project membership table for project-level permissions.
+
+    Defines user access to specific projects with granular roles:
+    - viewer: Read-only access
+    - editor: Can create/edit tasks
+    - owner: Full control over project
+    """
+    __tablename__ = "project_members"
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    role = Column(String(50), nullable=False, server_default="editor")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Relationships
+    project = relationship("Project")
+    user = relationship("User", back_populates="project_memberships")
+
+
+class ApiKey(Base):
+    """
+    API keys for programmatic access to the Task Tracker API.
+
+    Supports:
+    - API key authentication for agents and scripts
+    - Optional expiration dates
+    - Rate limiting (future)
+    - Project-scoped permissions (future)
+    """
+    __tablename__ = "api_keys"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    key_hash = Column(String(255), nullable=False, unique=True)
+    name = Column(String(255), nullable=False)
+    project_ids = Column(JSONB, server_default="[]")
+    permissions = Column(JSONB, server_default="[]")
+    rate_limit = Column(Integer, nullable=True)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    last_used_at = Column(DateTime(timezone=True), nullable=True)
+    is_active = Column(Boolean, nullable=False, server_default="true")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    # Relationships
+    user = relationship("User", back_populates="api_keys")
+
+
+class RefreshToken(Base):
+    """
+    Refresh tokens for JWT token rotation.
+
+    Stores JWT refresh token identifiers (JTI) for:
+    - Token revocation
+    - Token rotation
+    - Session management
+    """
+    __tablename__ = "refresh_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    token_jti = Column(String(255), nullable=False, unique=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    is_revoked = Column(Boolean, nullable=False, server_default="false")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Relationships
+    user = relationship("User", back_populates="refresh_tokens")

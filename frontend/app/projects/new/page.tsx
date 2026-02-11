@@ -1,23 +1,17 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft } from 'lucide-react';
-import { createProject, getAuthors, Author } from '@/lib/api';
+import { createProject } from '@/lib/api';
 
 export default function NewProject() {
   const router = useRouter();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [authorId, setAuthorId] = useState<number | undefined>();
-  const [authors, setAuthors] = useState<Author[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-
-  useEffect(() => {
-    getAuthors().then(setAuthors).catch(console.error);
-  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -32,8 +26,8 @@ export default function NewProject() {
     try {
       const project = await createProject({
         name: name.trim(),
-        description: description.trim() || undefined,
-        author_id: authorId
+        description: description.trim() || undefined
+        // Note: Backend automatically sets author_id to current user
       });
       router.push(`/projects/${project.id}`);
     } catch (err) {
@@ -89,25 +83,6 @@ export default function NewProject() {
             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
             placeholder="Enter project description"
           />
-        </div>
-
-        <div>
-          <label htmlFor="author" className="block text-sm font-medium text-gray-700 mb-2">
-            Author
-          </label>
-          <select
-            id="author"
-            value={authorId || ''}
-            onChange={(e) => setAuthorId(e.target.value ? Number(e.target.value) : undefined)}
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-          >
-            <option value="">Select author (optional)</option>
-            {authors.map((author) => (
-              <option key={author.id} value={author.id}>
-                {author.name} ({author.email})
-              </option>
-            ))}
-          </select>
         </div>
 
         <div className="flex gap-4">
