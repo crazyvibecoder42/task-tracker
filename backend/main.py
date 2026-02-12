@@ -192,11 +192,14 @@ ALLOWED_MIME_TYPES = {
     "application/zip", "application/x-tar", "application/gzip"
 }
 
-# Ensure upload directory exists
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-
-# Mount static files for serving uploads
-app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
+# Ensure upload directory exists (skip in test environment)
+try:
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    # Mount static files for serving uploads
+    app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
+except (OSError, PermissionError) as e:
+    # In test environment or when directory can't be created, skip upload directory setup
+    logger.warning(f"Could not create upload directory: {e}. File uploads will not work.")
 
 
 def validate_file_upload(file: UploadFile) -> None:
@@ -1109,6 +1112,145 @@ def update_project(
     return project
 
 
+@app.put("/api/projects/{project_id}/transfer", response_model=schemas.Project)
+def transfer_project_team(
+    project_id: int,
+    transfer_data: schemas.ProjectTeamTransfer,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Transfer project to a different team or make it personal.
+
+    Authorization:
+    - Requires owner role in current project
+    - If transferring to team: requires admin role in target team
+
+    Validation:
+    - All task owners must be members of target team
+    - Cannot transfer to same team (no-op)
+
+    Migration:
+    - Team → Personal: Creates ProjectMember(owner) for current user
+    - Personal → Team: Deletes all ProjectMember entries
+    - Team → Team: No ProjectMember changes
+    """
+    logger.debug(f"User {current_user.id} transferring project {project_id} to team {transfer_data.team_id}")
+
+    # 1. Check owner permission on current project
+    require_project_permission(current_user, project_id, "owner", db)
+
+    # 2. Get project
+    project = db.query(models.Project).filter(models.Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    old_team_id = project.team_id
+    new_team_id = transfer_data.team_id
+
+    # 3. Validate not a no-op
+    if old_team_id == new_team_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Project is already in this team" if new_team_id else "Project is already personal"
+        )
+
+    # 4. If transferring TO a team, validate team admin permission
+    if new_team_id is not None:
+        if new_team_id <= 0:
+            raise HTTPException(status_code=400, detail="Invalid team ID")
+
+        target_team = db.query(models.Team).filter(models.Team.id == new_team_id).first()
+        if not target_team:
+            raise HTTPException(status_code=404, detail="Target team not found")
+
+        require_team_permission(current_user, new_team_id, "admin", db)
+        logger.debug(f"User {current_user.id} is admin of target team {new_team_id}")
+
+    # 5. Validate task owner memberships
+    tasks_with_owners = (
+        db.query(models.Task)
+        .filter(
+            models.Task.project_id == project_id,
+            models.Task.owner_id.isnot(None)
+        )
+        .all()
+    )
+
+    if new_team_id is not None:
+        # Transferring TO team: Validate all task owners are team members
+        team_member_ids = {
+            tm.user_id for tm in
+            db.query(models.TeamMember.user_id)
+            .filter(models.TeamMember.team_id == new_team_id)
+            .all()
+        }
+
+        invalid_owners = []
+        for task in tasks_with_owners:
+            if task.owner_id not in team_member_ids:
+                owner = db.query(models.User).filter(models.User.id == task.owner_id).first()
+                invalid_owners.append(f"Task #{task.id} (owner: {owner.email if owner else task.owner_id})")
+
+        if invalid_owners:
+            target_team_name = target_team.name
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot transfer: The following tasks have owners who are not members of team {target_team_name}: {', '.join(invalid_owners[:5])}{'...' if len(invalid_owners) > 5 else ''}"
+            )
+
+    # 6. Handle ProjectMember migrations
+    if old_team_id is not None and new_team_id is None:
+        # Team → Personal: Migrate all team members to project members
+        # This preserves access for all existing team members
+        team_members = db.query(models.TeamMember).filter(
+            models.TeamMember.team_id == old_team_id
+        ).all()
+
+        logger.debug(f"Migrating {len(team_members)} team members to project members")
+
+        # Map team roles to project roles (same as team deletion logic)
+        role_mapping = {"admin": "owner", "member": "editor"}
+
+        for team_member in team_members:
+            # Check if ProjectMember entry already exists
+            existing = db.query(models.ProjectMember).filter(
+                models.ProjectMember.project_id == project_id,
+                models.ProjectMember.user_id == team_member.user_id
+            ).first()
+
+            if not existing:
+                project_role = role_mapping.get(team_member.role, "editor")
+                membership = models.ProjectMember(
+                    project_id=project_id,
+                    user_id=team_member.user_id,
+                    role=project_role
+                )
+                db.add(membership)
+                logger.debug(f"Created ProjectMember for user {team_member.user_id} as {project_role}")
+
+    elif old_team_id is None and new_team_id is not None:
+        # Personal → Team: Delete all ProjectMember entries
+        db.query(models.ProjectMember).filter(
+            models.ProjectMember.project_id == project_id
+        ).delete()
+        logger.debug(f"Deleted ProjectMember entries for project {project_id}")
+
+    # 7. Update project.team_id
+    project.team_id = new_team_id
+    db.commit()
+    db.refresh(project)
+
+    if new_team_id is None:
+        logger.info(f"Project {project_id} converted to personal by user {current_user.id}")
+    elif old_team_id is None:
+        logger.info(f"Project {project_id} transferred to team {new_team_id} by user {current_user.id}")
+    else:
+        logger.info(f"Project {project_id} transferred from team {old_team_id} to team {new_team_id}")
+
+    return project
+
+
 @app.delete("/api/projects/{project_id}")
 def delete_project(
     project_id: int,
@@ -1299,6 +1441,54 @@ def list_project_members(
 
         logger.info(f"Retrieved {len(members)} direct members for personal project {project_id}")
         return members
+
+
+@app.get("/api/projects/{project_id}/assignable-users", response_model=List[schemas.User])
+def list_assignable_users_for_project(
+    project_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    List users who can be assigned tasks in a project.
+
+    For team projects: Returns all team members (auto-join).
+    For personal projects: Returns all project members.
+
+    Requires: Viewer access to the project.
+    """
+    logger.debug(f"User {current_user.id} listing assignable users for project {project_id}")
+
+    # Check viewer permission
+    require_project_permission(current_user, project_id, "viewer", db)
+
+    # Get project
+    project = db.query(models.Project).filter(models.Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    if project.team_id:
+        # Team project: Return all team members
+        team_members = (
+            db.query(models.User)
+            .join(models.TeamMember, models.TeamMember.user_id == models.User.id)
+            .filter(models.TeamMember.team_id == project.team_id)
+            .order_by(models.User.name)
+            .all()
+        )
+        logger.info(f"Project {project_id} (team): {len(team_members)} assignable users")
+        return team_members
+    else:
+        # Personal project: Return all project members
+        project_members = (
+            db.query(models.User)
+            .join(models.ProjectMember, models.ProjectMember.user_id == models.User.id)
+            .filter(models.ProjectMember.project_id == project_id)
+            .order_by(models.User.name)
+            .all()
+        )
+        logger.info(f"Project {project_id} (personal): {len(project_members)} assignable users")
+        return project_members
 
 
 @app.delete("/api/projects/{project_id}/members/{user_id}")
