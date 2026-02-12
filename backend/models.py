@@ -65,6 +65,54 @@ class User(Base):
     project_memberships = relationship("ProjectMember", back_populates="user")
     api_keys = relationship("ApiKey", back_populates="user")
     refresh_tokens = relationship("RefreshToken", back_populates="user")
+    team_memberships = relationship("TeamMember", back_populates="user")
+    created_teams = relationship("Team", foreign_keys="Team.created_by", back_populates="creator")
+
+
+class Team(Base):
+    """
+    Team table for organizing users and projects.
+
+    Teams provide a layer of organization between users and projects:
+    - Team admins have full control over team management
+    - Team members automatically access all team projects (auto-join)
+    - Users can belong to multiple teams
+    - Projects can belong to at most one team
+    """
+    __tablename__ = "teams"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), nullable=False)
+    description = Column(Text)
+    created_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    # Relationships
+    creator = relationship("User", foreign_keys=[created_by], back_populates="created_teams")
+    members = relationship("TeamMember", back_populates="team", cascade="all, delete-orphan")
+    projects = relationship("Project", back_populates="team")
+
+
+class TeamMember(Base):
+    """
+    Team membership table for user-team relationships.
+
+    Defines user access to teams with two roles:
+    - admin: Full team control (manage members, projects)
+    - member: Standard access (view team, access team projects)
+    """
+    __tablename__ = "team_members"
+
+    id = Column(Integer, primary_key=True, index=True)
+    team_id = Column(Integer, ForeignKey("teams.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    role = Column(String(50), nullable=False, server_default="member")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Relationships
+    team = relationship("Team", back_populates="members")
+    user = relationship("User", back_populates="team_memberships")
 
 
 class Project(Base):
@@ -74,6 +122,7 @@ class Project(Base):
     name = Column(String(255), nullable=False)
     description = Column(Text)
     author_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
+    team_id = Column(Integer, ForeignKey("teams.id", ondelete="SET NULL"))
     search_vector = Column(TSVECTOR)
     kanban_settings = Column(JSONB, default=dict)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -81,6 +130,7 @@ class Project(Base):
 
     # Relationships
     author = relationship("User", back_populates="projects")
+    team = relationship("Team", back_populates="projects")
     tasks = relationship("Task", back_populates="project", cascade="all, delete-orphan")
 
 

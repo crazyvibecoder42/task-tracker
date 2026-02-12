@@ -98,7 +98,8 @@ async def list_tools() -> list[Tool]:
              inputSchema={"type": "object", "properties": {
                  "name": {"type": "string", "description": "Project name"},
                  "description": {"type": "string", "description": "Project description"},
-                 "author_id": {"type": "integer", "description": "Author ID (optional)"}
+                 "author_id": {"type": "integer", "description": "Author ID (optional)"},
+                 "team_id": {"type": "integer", "description": "Team ID to associate with project (optional)"}
              }, "required": ["name"]}),
         Tool(name="get_project", description="Get a project by ID with all its tasks",
              inputSchema={"type": "object", "properties": {
@@ -118,6 +119,48 @@ async def list_tools() -> list[Tool]:
              inputSchema={"type": "object", "properties": {
                  "project_id": {"type": "integer", "description": "Project ID"}
              }, "required": ["project_id"]}),
+        Tool(name="list_teams", description="List all teams the user is a member of",
+             inputSchema={"type": "object", "properties": {}, "required": []}),
+        Tool(name="create_team", description="Create a new team (creator becomes admin)",
+             inputSchema={"type": "object", "properties": {
+                 "name": {"type": "string", "description": "Team name"},
+                 "description": {"type": "string", "description": "Team description (optional)"}
+             }, "required": ["name"]}),
+        Tool(name="get_team", description="Get team details with members and projects",
+             inputSchema={"type": "object", "properties": {
+                 "team_id": {"type": "integer", "description": "Team ID"}
+             }, "required": ["team_id"]}),
+        Tool(name="update_team", description="Update team details (admin only)",
+             inputSchema={"type": "object", "properties": {
+                 "team_id": {"type": "integer", "description": "Team ID"},
+                 "name": {"type": "string", "description": "New team name (optional)"},
+                 "description": {"type": "string", "description": "New team description (optional)"}
+             }, "required": ["team_id"]}),
+        Tool(name="delete_team", description="Delete a team (admin only)",
+             inputSchema={"type": "object", "properties": {
+                 "team_id": {"type": "integer", "description": "Team ID"}
+             }, "required": ["team_id"]}),
+        Tool(name="list_team_members", description="List all members of a team",
+             inputSchema={"type": "object", "properties": {
+                 "team_id": {"type": "integer", "description": "Team ID"}
+             }, "required": ["team_id"]}),
+        Tool(name="add_team_member", description="Add a user to a team (admin only)",
+             inputSchema={"type": "object", "properties": {
+                 "team_id": {"type": "integer", "description": "Team ID"},
+                 "user_id": {"type": "integer", "description": "User ID to add"},
+                 "role": {"type": "string", "enum": ["admin", "member"], "description": "Member role (default: member)"}
+             }, "required": ["team_id", "user_id"]}),
+        Tool(name="update_team_member", description="Update a team member's role (admin only)",
+             inputSchema={"type": "object", "properties": {
+                 "team_id": {"type": "integer", "description": "Team ID"},
+                 "user_id": {"type": "integer", "description": "User ID"},
+                 "role": {"type": "string", "enum": ["admin", "member"], "description": "New member role"}
+             }, "required": ["team_id", "user_id", "role"]}),
+        Tool(name="remove_team_member", description="Remove a user from a team (admin only)",
+             inputSchema={"type": "object", "properties": {
+                 "team_id": {"type": "integer", "description": "Team ID"},
+                 "user_id": {"type": "integer", "description": "User ID to remove"}
+             }, "required": ["team_id", "user_id"]}),
         Tool(name="list_tasks", description="List tasks with optional filters. Requires project_id to prevent cross-project queries (see CLAUDE.md).",
              inputSchema={"type": "object", "properties": {
                  "project_id": {"type": "integer", "description": "Project ID (required - see CLAUDE.md for project assignments)"},
@@ -312,6 +355,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         data = {"name": arguments["name"]}
         if "description" in arguments: data["description"] = arguments["description"]
         if "author_id" in arguments: data["author_id"] = arguments["author_id"]
+        if "team_id" in arguments: data["team_id"] = arguments["team_id"]
         result = await api_request("POST", "/api/projects", data)
     elif name == "get_project":
         result = await api_request("GET", f"/api/projects/{arguments['project_id']}")
@@ -324,6 +368,41 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         result = await api_request("PUT", f"/api/projects/{arguments['project_id']}", data)
     elif name == "delete_project":
         result = await api_request("DELETE", f"/api/projects/{arguments['project_id']}")
+
+    # Team Management
+    elif name == "list_teams":
+        result = await api_request("GET", "/api/teams")
+    elif name == "create_team":
+        data = {"name": arguments["name"]}
+        if "description" in arguments:
+            data["description"] = arguments["description"]
+        result = await api_request("POST", "/api/teams", data)
+    elif name == "get_team":
+        result = await api_request("GET", f"/api/teams/{arguments['team_id']}")
+    elif name == "update_team":
+        data = {}
+        if "name" in arguments:
+            data["name"] = arguments["name"]
+        if "description" in arguments:
+            data["description"] = arguments["description"]
+        result = await api_request("PUT", f"/api/teams/{arguments['team_id']}", data)
+    elif name == "delete_team":
+        result = await api_request("DELETE", f"/api/teams/{arguments['team_id']}")
+
+    # Team Member Management
+    elif name == "list_team_members":
+        result = await api_request("GET", f"/api/teams/{arguments['team_id']}/members")
+    elif name == "add_team_member":
+        data = {"user_id": arguments["user_id"]}
+        if "role" in arguments:
+            data["role"] = arguments["role"]
+        result = await api_request("POST", f"/api/teams/{arguments['team_id']}/members", data)
+    elif name == "update_team_member":
+        data = {"role": arguments["role"]}
+        result = await api_request("PUT", f"/api/teams/{arguments['team_id']}/members/{arguments['user_id']}", data)
+    elif name == "remove_team_member":
+        result = await api_request("DELETE", f"/api/teams/{arguments['team_id']}/members/{arguments['user_id']}")
+
     elif name == "list_tasks":
         # Validate project_id is provided
         if "project_id" not in arguments or arguments["project_id"] is None:

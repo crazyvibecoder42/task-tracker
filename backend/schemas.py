@@ -51,6 +51,7 @@ class TaskStatus(str, Enum):
 # Role type aliases for validation
 UserRole = Literal["admin", "editor", "viewer"]
 ProjectMemberRole = Literal["owner", "editor", "viewer"]
+TeamMemberRole = Literal["admin", "member"]
 
 
 # User schemas
@@ -122,6 +123,70 @@ class APIKeyResponse(BaseModel):
     last_used_at: Optional[datetime] = None
     is_active: bool
     created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# Team schemas
+class TeamBase(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    description: Optional[str] = None
+
+
+class TeamCreate(TeamBase):
+    pass
+
+
+class TeamUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    description: Optional[str] = None
+
+
+class Team(TeamBase):
+    id: int
+    created_by: Optional[int]
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# Team Member schemas
+class TeamMemberCreate(BaseModel):
+    user_id: int
+    role: TeamMemberRole = "member"
+
+
+class TeamMemberUpdate(BaseModel):
+    role: TeamMemberRole
+
+
+class TeamMemberResponse(BaseModel):
+    id: int
+    team_id: int
+    user_id: int
+    user: Optional[User] = None
+    role: TeamMemberRole
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class TeamWithMembers(Team):
+    members: List[TeamMemberResponse] = []
+    creator: Optional[User] = None
+
+    class Config:
+        from_attributes = True
+
+
+class TeamWithProjects(Team):
+    projects: List['Project'] = []
+    members: List[TeamMemberResponse] = []
+    creator: Optional[User] = None
 
     class Config:
         from_attributes = True
@@ -377,7 +442,7 @@ class ProjectBase(BaseModel):
 class ProjectCreate(ProjectBase):
     # Note: author_id is automatically set to current user by backend
     # Not accepted from client to prevent privilege confusion
-    pass
+    team_id: Optional[int] = Field(default=None, ge=1)  # Must be positive if provided
 
 
 class ProjectUpdate(BaseModel):
@@ -389,6 +454,8 @@ class Project(ProjectBase):
     id: int
     author_id: Optional[int]
     author: Optional[User] = None
+    team_id: Optional[int] = None
+    team: Optional[Team] = None
     kanban_settings: Optional[KanbanSettings] = None
     created_at: datetime
     updated_at: datetime
@@ -517,3 +584,8 @@ class SearchResults(BaseModel):
     projects: List[SearchResultProject] = []
     comments: List[SearchResultComment] = []
     total_results: int = 0
+
+
+# Resolve forward references for circular dependencies
+TeamWithProjects.model_rebuild()
+TaskWithDependencies.model_rebuild()

@@ -16,12 +16,33 @@ CREATE TABLE IF NOT EXISTS users (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Teams table
+CREATE TABLE IF NOT EXISTS teams (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    description TEXT,
+    created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Team members table
+CREATE TABLE IF NOT EXISTS team_members (
+    id SERIAL PRIMARY KEY,
+    team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role VARCHAR(50) NOT NULL DEFAULT 'member' CHECK (role IN ('admin', 'member')),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(team_id, user_id)
+);
+
 -- Projects table
 CREATE TABLE IF NOT EXISTS projects (
     id SERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
     description TEXT,
     author_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL,
     search_vector TSVECTOR,
     kanban_settings JSONB DEFAULT '{
         "wip_limits": {
@@ -208,8 +229,18 @@ EXECUTE FUNCTION comments_search_vector_update();
 CREATE INDEX idx_users_email ON users(email);
 CREATE INDEX idx_users_role ON users(role);
 
+-- Team indexes
+CREATE INDEX idx_teams_created_by ON teams(created_by);
+CREATE INDEX idx_teams_name ON teams(name);
+
+-- Team member indexes
+CREATE INDEX idx_team_members_team_id ON team_members(team_id);
+CREATE INDEX idx_team_members_user_id ON team_members(user_id);
+CREATE INDEX idx_team_members_team_role ON team_members(team_id, role);
+
 -- Project indexes
 CREATE INDEX idx_projects_author_id ON projects(author_id);
+CREATE INDEX idx_projects_team_id ON projects(team_id);
 CREATE INDEX idx_projects_search_vector ON projects USING GIN (search_vector);
 CREATE INDEX idx_projects_kanban_settings ON projects USING GIN (kanban_settings);
 

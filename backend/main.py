@@ -23,6 +23,8 @@ from auth.permissions import (
     has_project_access,
     require_project_permission,
     get_user_projects,
+    check_team_permission,
+    require_team_permission,
 )
 
 # Configure logging
@@ -486,6 +488,440 @@ def delete_user(
     return {"message": "User deleted"}
 
 
+# ============== Teams ==============
+
+@app.post("/api/teams", response_model=schemas.Team)
+def create_team(
+    team: schemas.TeamCreate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Create a new team and add creator as admin."""
+    logger.debug(f"User {current_user.id} creating team: {team.name}")
+
+    # Create team with current user as creator
+    team_data = team.model_dump()
+    team_data["created_by"] = current_user.id
+
+    db_team = models.Team(**team_data)
+    db.add(db_team)
+    db.flush()  # Get team ID without committing
+
+    # Add creator as team admin
+    membership = models.TeamMember(
+        team_id=db_team.id,
+        user_id=current_user.id,
+        role="admin"
+    )
+    db.add(membership)
+
+    db.commit()
+    db.refresh(db_team)
+
+    logger.info(f"Team created: {db_team.name} (ID: {db_team.id}) by user {current_user.id}")
+    return db_team
+
+
+@app.get("/api/teams", response_model=List[schemas.Team])
+def list_teams(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """List all teams the current user is a member of."""
+    logger.debug(f"User {current_user.id} listing teams")
+
+    # Global admins can see all teams
+    if current_user.role == "admin":
+        teams = (
+            db.query(models.Team)
+            .options(joinedload(models.Team.creator))
+            .all()
+        )
+    else:
+        # Get teams user is a member of
+        team_ids = (
+            db.query(models.TeamMember.team_id)
+            .filter(models.TeamMember.user_id == current_user.id)
+            .all()
+        )
+        team_id_list = [t.team_id for t in team_ids]
+
+        teams = (
+            db.query(models.Team)
+            .filter(models.Team.id.in_(team_id_list))
+            .options(joinedload(models.Team.creator))
+            .all()
+        )
+
+    logger.info(f"User {current_user.id} retrieved {len(teams)} teams")
+    return teams
+
+
+@app.get("/api/teams/{team_id}", response_model=schemas.TeamWithProjects)
+def get_team(
+    team_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get team details with projects and members (requires member access)."""
+    from auth.permissions import require_team_permission
+
+    logger.debug(f"User {current_user.id} requesting team {team_id}")
+
+    # Check if user has access to this team
+    require_team_permission(current_user, team_id, "member", db)
+
+    team = (
+        db.query(models.Team)
+        .options(
+            joinedload(models.Team.creator),
+            joinedload(models.Team.members).joinedload(models.TeamMember.user),
+            joinedload(models.Team.projects).joinedload(models.Project.author)
+        )
+        .filter(models.Team.id == team_id)
+        .first()
+    )
+
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+
+    logger.info(f"User {current_user.id} retrieved team {team_id}")
+    return team
+
+
+@app.put("/api/teams/{team_id}", response_model=schemas.Team)
+def update_team(
+    team_id: int,
+    team_update: schemas.TeamUpdate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update team details (requires admin access)."""
+    from auth.permissions import require_team_permission
+
+    logger.debug(f"User {current_user.id} updating team {team_id}")
+
+    # Check if user has admin access to this team
+    require_team_permission(current_user, team_id, "admin", db)
+
+    team = db.query(models.Team).filter(models.Team.id == team_id).first()
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+
+    # Update team fields
+    update_data = team_update.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(team, key, value)
+
+    db.commit()
+    db.refresh(team)
+
+    logger.info(f"Team updated: {team.name} (ID: {team_id}) by user {current_user.id}")
+    return team
+
+
+@app.delete("/api/teams/{team_id}")
+def delete_team(
+    team_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Delete team (requires admin access). Projects are migrated to direct membership."""
+    from auth.permissions import require_team_permission
+
+    logger.debug(f"User {current_user.id} deleting team {team_id}")
+
+    # Check if user has admin access to this team
+    require_team_permission(current_user, team_id, "admin", db)
+
+    team = db.query(models.Team).filter(models.Team.id == team_id).first()
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+
+    # CRITICAL: Migrate team projects to direct membership before deletion
+    # This prevents orphaned projects that would be inaccessible to non-admins
+    team_projects = db.query(models.Project).filter(models.Project.team_id == team_id).all()
+    team_members = db.query(models.TeamMember).filter(models.TeamMember.team_id == team_id).all()
+
+    if team_projects:
+        logger.info(f"Migrating {len(team_projects)} team projects to direct membership")
+
+        # Map team roles to project roles
+        role_mapping = {"admin": "owner", "member": "editor"}
+
+        for project in team_projects:
+            for team_member in team_members:
+                # Check if ProjectMember entry already exists (shouldn't, but be safe)
+                existing = db.query(models.ProjectMember).filter(
+                    models.ProjectMember.project_id == project.id,
+                    models.ProjectMember.user_id == team_member.user_id
+                ).first()
+
+                if not existing:
+                    # Create ProjectMember with mapped role
+                    project_role = role_mapping.get(team_member.role, "editor")
+                    project_member = models.ProjectMember(
+                        project_id=project.id,
+                        user_id=team_member.user_id,
+                        role=project_role
+                    )
+                    db.add(project_member)
+                    logger.debug(
+                        f"Added ProjectMember: project={project.id}, user={team_member.user_id}, "
+                        f"role={project_role} (from team role: {team_member.role})"
+                    )
+
+    # Now safe to delete team
+    # - Projects will have team_id set to NULL but retain ProjectMember access
+    # - Team members will be cascade deleted (but projects are now accessible via ProjectMember)
+    db.delete(team)
+    db.commit()
+
+    logger.info(
+        f"Team deleted: {team.name} (ID: {team_id}) by user {current_user.id}. "
+        f"Migrated {len(team_projects)} projects to direct membership."
+    )
+    return {
+        "message": "Team deleted",
+        "migrated_projects": len(team_projects)
+    }
+
+
+@app.get("/api/teams/{team_id}/members", response_model=List[schemas.TeamMemberResponse])
+def list_team_members(
+    team_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """List team members (requires member access)."""
+    from auth.permissions import require_team_permission
+
+    logger.debug(f"User {current_user.id} listing members for team {team_id}")
+
+    # Check if user has access to this team
+    require_team_permission(current_user, team_id, "member", db)
+
+    members = (
+        db.query(models.TeamMember)
+        .filter(models.TeamMember.team_id == team_id)
+        .options(joinedload(models.TeamMember.user))
+        .all()
+    )
+
+    logger.info(f"User {current_user.id} retrieved {len(members)} members for team {team_id}")
+    return members
+
+
+@app.get("/api/teams/{team_id}/available-users", response_model=List[schemas.User])
+def list_available_users_for_team(
+    team_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """List users who can be added to a team (team admin only)."""
+    from auth.permissions import require_team_permission
+
+    logger.debug(f"User {current_user.id} listing available users for team {team_id}")
+
+    # Check if user is team admin
+    require_team_permission(current_user, team_id, "admin", db)
+
+    # Get existing member IDs
+    existing_member_ids = [
+        m.user_id for m in
+        db.query(models.TeamMember.user_id).filter(models.TeamMember.team_id == team_id).all()
+    ]
+
+    # Return all users who are NOT already members
+    available_users = (
+        db.query(models.User)
+        .filter(models.User.id.notin_(existing_member_ids) if existing_member_ids else True)
+        .all()
+    )
+
+    logger.info(f"User {current_user.id} retrieved {len(available_users)} available users for team {team_id}")
+    return available_users
+
+
+@app.post("/api/teams/{team_id}/members", response_model=schemas.TeamMemberResponse)
+def add_team_member(
+    team_id: int,
+    member: schemas.TeamMemberCreate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Add a member to a team (requires admin access)."""
+    from auth.permissions import require_team_permission
+
+    logger.debug(f"User {current_user.id} adding member {member.user_id} to team {team_id}")
+
+    # Check if user has admin access to this team
+    require_team_permission(current_user, team_id, "admin", db)
+
+    # Validate that the user exists
+    user = db.query(models.User).filter(models.User.id == member.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Check if user is already a member
+    existing_membership = (
+        db.query(models.TeamMember)
+        .filter(
+            models.TeamMember.team_id == team_id,
+            models.TeamMember.user_id == member.user_id
+        )
+        .first()
+    )
+
+    if existing_membership:
+        raise HTTPException(
+            status_code=400,
+            detail="User is already a member of this team"
+        )
+
+    # Add team member
+    db_member = models.TeamMember(
+        team_id=team_id,
+        user_id=member.user_id,
+        role=member.role
+    )
+    db.add(db_member)
+    db.commit()
+    db.refresh(db_member)
+
+    # Reload with user relationship
+    db_member = (
+        db.query(models.TeamMember)
+        .filter(models.TeamMember.id == db_member.id)
+        .options(joinedload(models.TeamMember.user))
+        .first()
+    )
+
+    logger.info(f"User {member.user_id} added to team {team_id} with role {member.role}")
+    return db_member
+
+
+@app.put("/api/teams/{team_id}/members/{user_id}", response_model=schemas.TeamMemberResponse)
+def update_team_member(
+    team_id: int,
+    user_id: int,
+    member_update: schemas.TeamMemberUpdate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update team member role (requires admin access)."""
+    from auth.permissions import require_team_permission
+
+    logger.debug(f"User {current_user.id} updating member {user_id} in team {team_id}")
+
+    # Check if user has admin access to this team
+    require_team_permission(current_user, team_id, "admin", db)
+
+    # Get the team member
+    member = (
+        db.query(models.TeamMember)
+        .filter(
+            models.TeamMember.team_id == team_id,
+            models.TeamMember.user_id == user_id
+        )
+        .first()
+    )
+
+    if not member:
+        raise HTTPException(status_code=404, detail="Team member not found")
+
+    # If demoting from admin, check if they're the last admin
+    if member.role == "admin" and member_update.role != "admin":
+        admin_count = (
+            db.query(models.TeamMember)
+            .filter(
+                models.TeamMember.team_id == team_id,
+                models.TeamMember.role == "admin"
+            )
+            .count()
+        )
+
+        if admin_count <= 1:
+            logger.warning(
+                f"User {current_user.id} attempted to demote the last admin in team {team_id}"
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot demote the last team admin. Promote another member to admin first."
+            )
+
+    # Update role
+    member.role = member_update.role
+    db.commit()
+    db.refresh(member)
+
+    # Reload with user relationship
+    member = (
+        db.query(models.TeamMember)
+        .filter(models.TeamMember.id == member.id)
+        .options(joinedload(models.TeamMember.user))
+        .first()
+    )
+
+    logger.info(f"Member {user_id} in team {team_id} updated to role {member_update.role}")
+    return member
+
+
+@app.delete("/api/teams/{team_id}/members/{user_id}")
+def remove_team_member(
+    team_id: int,
+    user_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Remove a member from a team (requires admin access)."""
+    from auth.permissions import require_team_permission
+
+    logger.debug(f"User {current_user.id} removing member {user_id} from team {team_id}")
+
+    # Check if user has admin access to this team
+    require_team_permission(current_user, team_id, "admin", db)
+
+    # Get the team member
+    member = (
+        db.query(models.TeamMember)
+        .filter(
+            models.TeamMember.team_id == team_id,
+            models.TeamMember.user_id == user_id
+        )
+        .first()
+    )
+
+    if not member:
+        raise HTTPException(status_code=404, detail="Team member not found")
+
+    # If removing an admin, check if they're the last admin
+    if member.role == "admin":
+        admin_count = (
+            db.query(models.TeamMember)
+            .filter(
+                models.TeamMember.team_id == team_id,
+                models.TeamMember.role == "admin"
+            )
+            .count()
+        )
+
+        if admin_count <= 1:
+            logger.warning(
+                f"User {current_user.id} attempted to remove the last admin from team {team_id}"
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot remove the last team admin. Promote another member to admin first."
+            )
+
+    db.delete(member)
+    db.commit()
+
+    logger.info(f"Member {user_id} removed from team {team_id}")
+    return {"message": "Team member removed"}
+
+
 # ============== Projects ==============
 
 @app.get("/api/projects", response_model=List[schemas.Project])
@@ -502,7 +938,10 @@ def list_projects(
     projects = (
         db.query(models.Project)
         .filter(models.Project.id.in_(project_ids))
-        .options(joinedload(models.Project.author))
+        .options(
+            joinedload(models.Project.author),
+            joinedload(models.Project.team)
+        )
         .all()
     )
 
@@ -516,8 +955,13 @@ def create_project(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Create a new project and add creator as owner."""
+    """Create a new project and add creator as owner (or assign to team)."""
     logger.debug(f"User {current_user.id} creating project: {project.name}")
+
+    # If team_id provided, validate team admin permission
+    if project.team_id is not None:
+        require_team_permission(current_user, project.team_id, "admin", db)
+        logger.debug(f"Project will be created under team {project.team_id}")
 
     # Create project with current user as author (ignore any client-provided author_id)
     project_data = project.model_dump()
@@ -527,13 +971,18 @@ def create_project(
     db.add(db_project)
     db.flush()  # Get project ID without committing
 
-    # Add creator as project owner
-    membership = models.ProjectMember(
-        project_id=db_project.id,
-        user_id=current_user.id,
-        role="owner"
-    )
-    db.add(membership)
+    # Only create ProjectMember for personal projects (no team)
+    # Team projects use team membership for access control
+    if project.team_id is None:
+        membership = models.ProjectMember(
+            project_id=db_project.id,
+            user_id=current_user.id,
+            role="owner"
+        )
+        db.add(membership)
+        logger.debug(f"Added creator as owner for personal project {db_project.id}")
+    else:
+        logger.debug(f"Skipping ProjectMember creation for team project {db_project.id}")
 
     db.commit()
     db.refresh(db_project)
@@ -557,6 +1006,7 @@ def get_project(
     project = db.query(models.Project)\
         .options(
             joinedload(models.Project.author),
+            joinedload(models.Project.team),
             joinedload(models.Project.tasks).joinedload(models.Task.author),
             joinedload(models.Project.tasks).joinedload(models.Task.owner),
             joinedload(models.Project.tasks).joinedload(models.Task.comments)
@@ -578,6 +1028,8 @@ def get_project(
         "description": project.description,
         "author_id": project.author_id,
         "author": project.author,
+        "team_id": project.team_id,  # Include team_id for team projects
+        "team": project.team,  # Include team relationship
         "created_at": project.created_at,
         "updated_at": project.updated_at,
         "tasks": [
@@ -747,6 +1199,14 @@ def add_project_member(
     # Check if user has owner/admin permission
     require_project_permission(current_user, project_id, "owner", db)
 
+    # Block direct member management for team projects
+    project = db.query(models.Project).filter(models.Project.id == project_id).first()
+    if project and project.team_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot add members to team projects. Manage team membership instead."
+        )
+
     # Check if user to add exists
     user_to_add = db.query(models.User).filter(models.User.id == member_data.user_id).first()
     if not user_to_add:
@@ -784,21 +1244,61 @@ def list_project_members(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """List all members of a project (requires viewer access)."""
+    """List all members of a project (requires viewer access).
+
+    For team projects, returns TeamMember mapped to ProjectMember schema.
+    For personal projects, returns ProjectMember directly.
+    """
     logger.debug(f"User {current_user.id} listing members of project {project_id}")
 
     # Check if user has access to this project
     require_project_permission(current_user, project_id, "viewer", db)
 
-    members = (
-        db.query(models.ProjectMember)
-        .filter(models.ProjectMember.project_id == project_id)
-        .options(joinedload(models.ProjectMember.user))
-        .all()
-    )
+    # Check if this is a team project
+    project = db.query(models.Project).filter(models.Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
 
-    logger.info(f"Retrieved {len(members)} members for project {project_id}")
-    return members
+    if project.team_id:
+        # Team project: return team members mapped to ProjectMember schema
+        team_members = (
+            db.query(models.TeamMember)
+            .filter(models.TeamMember.team_id == project.team_id)
+            .options(joinedload(models.TeamMember.user))
+            .all()
+        )
+
+        # Map team roles to project roles for response
+        role_mapping = {"admin": "owner", "member": "editor"}
+
+        # Convert TeamMember to ProjectMember response format
+        members = []
+        for tm in team_members:
+            # Create a pseudo-ProjectMember object with the same structure
+            class ProjectMemberProxy:
+                def __init__(self, team_member, project_id):
+                    self.id = team_member.id  # Use TeamMember ID
+                    self.project_id = project_id
+                    self.user_id = team_member.user_id
+                    self.user = team_member.user
+                    self.role = role_mapping.get(team_member.role, "editor")
+                    self.created_at = team_member.created_at  # Required by response model
+
+            members.append(ProjectMemberProxy(tm, project_id))
+
+        logger.info(f"Returning {len(members)} team members for team project {project_id}")
+        return members
+    else:
+        # Personal project: return direct ProjectMember entries
+        members = (
+            db.query(models.ProjectMember)
+            .filter(models.ProjectMember.project_id == project_id)
+            .options(joinedload(models.ProjectMember.user))
+            .all()
+        )
+
+        logger.info(f"Retrieved {len(members)} direct members for personal project {project_id}")
+        return members
 
 
 @app.delete("/api/projects/{project_id}/members/{user_id}")
@@ -813,6 +1313,14 @@ def remove_project_member(
 
     # Check if user has owner/admin permission
     require_project_permission(current_user, project_id, "owner", db)
+
+    # Block direct member management for team projects
+    project = db.query(models.Project).filter(models.Project.id == project_id).first()
+    if project and project.team_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot remove members from team projects. Manage team membership instead."
+        )
 
     # Find membership
     membership = db.query(models.ProjectMember).filter(
@@ -1894,14 +2402,39 @@ def update_task(
             logger.info(f"Owner {update_data['owner_id']} not found")
             raise HTTPException(status_code=404, detail=f"Owner with ID {update_data['owner_id']} not found")
 
-        # Validate owner has access to the task's project
-        if not has_project_access(owner, task.project_id, db):
-            logger.info(f"Owner {update_data['owner_id']} is not a member of project {task.project_id}")
-            raise HTTPException(
-                status_code=400,
-                detail=f"Cannot assign task to user {owner.email}: user is not a member of this project"
-            )
-        logger.debug(f"Owner validation successful (user is project member)")
+        # Get the task's project to check team membership
+        project = db.query(models.Project).filter(models.Project.id == task.project_id).first()
+
+        if project and project.team_id:
+            # For team projects, validate owner is a team member
+            is_team_member = (
+                db.query(models.TeamMember)
+                .filter(
+                    models.TeamMember.team_id == project.team_id,
+                    models.TeamMember.user_id == update_data['owner_id']
+                )
+                .first()
+            ) is not None
+
+            if not is_team_member:
+                logger.info(
+                    f"Owner {update_data['owner_id']} is not a member of team {project.team_id} "
+                    f"for project {task.project_id}"
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot assign task to user {owner.email}: user is not a member of this team"
+                )
+            logger.debug(f"Owner validation successful (user is team member)")
+        else:
+            # For personal projects, validate owner has project access
+            if not has_project_access(owner, task.project_id, db):
+                logger.info(f"Owner {update_data['owner_id']} is not a member of project {task.project_id}")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot assign task to user {owner.email}: user is not a member of this project"
+                )
+            logger.debug(f"Owner validation successful (user is project member)")
 
     # Track old values for event tracking
     old_values = {key: getattr(task, key) for key in update_data.keys()}

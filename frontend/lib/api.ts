@@ -94,12 +94,48 @@ export interface ExternalLink {
   created_at: string;
 }
 
+export interface Team {
+  id: number;
+  name: string;
+  description: string | null;
+  created_by: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TeamMember {
+  id: number;
+  team_id: number;
+  user_id: number;
+  user: Author | null;
+  role: 'admin' | 'member';
+  created_at: string;
+}
+
+export interface TeamWithProjects extends Team {
+  projects: Project[];
+  members: TeamMember[];
+  creator: Author | null;
+}
+
+export interface TeamCreate {
+  name: string;
+  description?: string;
+}
+
+export interface TeamUpdate {
+  name?: string;
+  description?: string;
+}
+
 export interface Project {
   id: number;
   name: string;
   description: string | null;
   author_id: number | null;
   author: Author | null;
+  team_id?: number | null;
+  team?: Team | null;
   tasks?: Task[];
   created_at: string;
   updated_at: string;
@@ -242,7 +278,7 @@ export const deleteAuthor = (id: number) =>
 export const getProjects = () => fetchApi<Project[]>('/api/projects');
 export const getProject = (id: number) => fetchApi<Project>('/api/projects/' + id);
 export const getProjectStats = (id: number) => fetchApi<ProjectStats>('/api/projects/' + id + '/stats');
-export const createProject = (data: { name: string; description?: string }) =>
+export const createProject = (data: { name: string; description?: string; team_id?: number }) =>
   fetchApi<Project>('/api/projects', { method: 'POST', body: JSON.stringify(data) });
 export const updateProject = (id: number, data: { name?: string; description?: string }) =>
   fetchApi<Project>('/api/projects/' + id, { method: 'PUT', body: JSON.stringify(data) });
@@ -491,3 +527,31 @@ export const bulkUpdateTasks = (taskIds: number[], updates: Partial<Task>) =>
     method: 'POST',
     body: JSON.stringify({ task_ids: taskIds, updates }),
   });
+
+// Teams
+export const getTeams = () => fetchApi<Team[]>('/api/teams');
+export const getTeam = (id: number) => fetchApi<TeamWithProjects>('/api/teams/' + id);
+export const createTeam = (data: TeamCreate) =>
+  fetchApi<Team>('/api/teams', { method: 'POST', body: JSON.stringify(data) });
+export const updateTeam = (id: number, data: TeamUpdate) =>
+  fetchApi<Team>('/api/teams/' + id, { method: 'PUT', body: JSON.stringify(data) });
+export const deleteTeam = (id: number) =>
+  fetchApi<void>('/api/teams/' + id, { method: 'DELETE' });
+
+// Team Members
+export const getTeamMembers = (teamId: number) =>
+  fetchApi<TeamMember[]>('/api/teams/' + teamId + '/members');
+export const getAvailableUsersForTeam = (teamId: number) =>
+  fetchApi<Author[]>('/api/teams/' + teamId + '/available-users');
+export const addTeamMember = (teamId: number, data: { user_id: number; role: 'admin' | 'member' }) =>
+  fetchApi<TeamMember>('/api/teams/' + teamId + '/members', {
+    method: 'POST',
+    body: JSON.stringify(data)
+  });
+export const updateTeamMember = (teamId: number, userId: number, data: { role: 'admin' | 'member' }) =>
+  fetchApi<TeamMember>('/api/teams/' + teamId + '/members/' + userId, {
+    method: 'PUT',
+    body: JSON.stringify(data)
+  });
+export const removeTeamMember = (teamId: number, userId: number) =>
+  fetchApi<void>('/api/teams/' + teamId + '/members/' + userId, { method: 'DELETE' });

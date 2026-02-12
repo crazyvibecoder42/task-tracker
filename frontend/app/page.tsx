@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { AlertCircle, Clock, FolderKanban, TrendingUp, Inbox, Circle, PlayCircle, XCircle, Eye, CheckCircle2 } from 'lucide-react';
+import { AlertCircle, Clock, FolderKanban, TrendingUp, Inbox, Circle, PlayCircle, XCircle, Eye, CheckCircle2, Users } from 'lucide-react';
 import { getOverallStats, getProjects, getTasks, getOverdueTasks, getUpcomingTasks, OverallStats, Project, Task } from '@/lib/api';
 import { STATUS_CONFIG } from '@/components/StatusConfig';
 import { formatDistanceToNow } from 'date-fns';
@@ -365,7 +365,15 @@ export default function Dashboard() {
                       <FolderKanban className="w-4 h-4 text-indigo-600" />
                     </div>
                     <div>
-                      <p className="font-medium text-gray-900">{project.name}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="font-medium text-gray-900">{project.name}</p>
+                        {project.team && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium bg-indigo-100 text-indigo-700 rounded-full">
+                            <Users className="w-3 h-3" />
+                            {project.team.name}
+                          </span>
+                        )}
+                      </div>
                       {project.description && (
                         <p className="text-sm text-gray-500 truncate max-w-xs">
                           {project.description}

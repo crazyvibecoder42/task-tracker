@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { FolderKanban, Grid3x3, LayoutDashboard, ListTodo, Plus, Users } from 'lucide-react';
-import { getProjects, Project } from '@/lib/api';
+import { getProjects, getTeams, Project, Team } from '@/lib/api';
 import UserMenu from '@/components/UserMenu';
 import { useAuth } from '@/contexts/AuthContext';
 
@@ -12,9 +12,11 @@ export default function Sidebar() {
   const pathname = usePathname();
   const { hasRole } = useAuth();
   const [projects, setProjects] = useState<Project[]>([]);
+  const [teams, setTeams] = useState<Team[]>([]);
 
   useEffect(() => {
     loadProjects();
+    loadTeams();
   }, []);
 
   const loadProjects = async () => {
@@ -23,6 +25,15 @@ export default function Sidebar() {
       setProjects(data);
     } catch (error) {
       console.error('Failed to load projects:', error);
+    }
+  };
+
+  const loadTeams = async () => {
+    try {
+      const data = await getTeams();
+      setTeams(data);
+    } catch (error) {
+      console.error('Failed to load teams:', error);
     }
   };
 
@@ -88,6 +99,43 @@ export default function Sidebar() {
             Authors
           </Link>
         )}
+
+        {/* Teams Section */}
+        <div className="pt-4">
+          <div className="flex items-center justify-between px-3 mb-2">
+            <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+              Teams
+            </span>
+            <Link
+              href="/teams/new"
+              className="p-1 rounded hover:bg-gray-100 text-gray-500 hover:text-gray-700"
+              title="Create Team"
+            >
+              <Plus className="w-4 h-4" />
+            </Link>
+          </div>
+
+          <div className="space-y-1">
+            {teams.map((team) => (
+              <Link
+                key={team.id}
+                href={`/teams/${team.id}`}
+                className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  pathname === `/teams/${team.id}`
+                    ? 'bg-indigo-50 text-indigo-600'
+                    : 'text-gray-700 hover:bg-gray-100'
+                }`}
+              >
+                <Users className="w-4 h-4" />
+                <span className="truncate">{team.name}</span>
+              </Link>
+            ))}
+
+            {teams.length === 0 && (
+              <p className="px-3 py-2 text-sm text-gray-500">No teams yet</p>
+            )}
+          </div>
+        </div>
 
         <div className="pt-4">
           <div className="flex items-center justify-between px-3 mb-2">
