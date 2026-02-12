@@ -119,6 +119,29 @@ async def list_tools() -> list[Tool]:
              inputSchema={"type": "object", "properties": {
                  "project_id": {"type": "integer", "description": "Project ID"}
              }, "required": ["project_id"]}),
+        Tool(
+            name="list_assignable_users",
+            description="List users who can be assigned tasks in a project. Returns team members for team projects or project members for personal projects.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer", "description": "Project ID"}
+                },
+                "required": ["project_id"]
+            }
+        ),
+        Tool(
+            name="transfer_project_team",
+            description="Transfer project to a different team or make it personal. Requires owner role in project and admin role in target team. Set team_id to null to make personal.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer", "description": "Project ID to transfer"},
+                    "team_id": {"type": ["integer", "null"], "description": "Target team ID (or null for personal)"}
+                },
+                "required": ["project_id", "team_id"]
+            }
+        ),
         Tool(name="list_teams", description="List all teams the user is a member of",
              inputSchema={"type": "object", "properties": {}, "required": []}),
         Tool(name="create_team", description="Create a new team (creator becomes admin)",
@@ -370,6 +393,15 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         result = await api_request("PUT", f"/api/projects/{arguments['project_id']}", data)
     elif name == "delete_project":
         result = await api_request("DELETE", f"/api/projects/{arguments['project_id']}")
+
+    elif name == "list_assignable_users":
+        project_id = arguments["project_id"]
+        result = await api_request("GET", f"/api/projects/{project_id}/assignable-users")
+
+    elif name == "transfer_project_team":
+        project_id = arguments["project_id"]
+        team_id = arguments["team_id"]  # Required field - fail fast if missing
+        result = await api_request("PUT", f"/api/projects/{project_id}/transfer", {"team_id": team_id})
 
     # Team Management
     elif name == "list_teams":

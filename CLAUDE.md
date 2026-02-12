@@ -121,6 +121,9 @@ mcp__task-tracker__take_ownership(task_id, force=False)
 - Task creation/update with time fields:
   - `create_task(..., due_date="2026-02-25T14:00:00Z", estimated_hours=10.0)`
   - `update_task(task_id, actual_hours=8.5)`
+- Project management tools:
+  - `list_assignable_users(project_id)` - List users who can be assigned tasks in a project
+  - `transfer_project_team(project_id, team_id)` - Transfer project between teams or make personal
 
 ### Event Tracking
 - Comprehensive audit trail for all task operations
@@ -205,6 +208,18 @@ mcp__task-tracker__take_ownership(task_id, force=False)
   - Note: `author_id` is automatically set to the authenticated user
 - `PUT /api/tasks/{id}` - Update task with actual hours
   - Body: `{"actual_hours": 8.5}`
+
+### Assignable Users
+- `GET /api/projects/{id}/assignable-users` - List users who can be assigned tasks
+  - For team projects: Returns all team members
+  - For personal projects: Returns all project members
+  - Requires: Viewer access to project
+
+### Project Team Transfer
+- `PUT /api/projects/{id}/transfer` - Transfer project to different team or make personal
+  - Body: `{"team_id": 1}` (or `null` for personal)
+  - Requires: Owner role in project, admin role in target team
+  - Validates: All task owners must be in target team
 
 ## Business Rules
 

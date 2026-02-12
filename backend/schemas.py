@@ -450,6 +450,14 @@ class ProjectUpdate(BaseModel):
     description: Optional[str] = None
 
 
+class ProjectTeamTransfer(BaseModel):
+    """Schema for transferring project to a different team or making it personal."""
+    team_id: Optional[int] = Field(
+        None,
+        description="Target team ID, or None to convert to personal project"
+    )
+
+
 class Project(ProjectBase):
     id: int
     author_id: Optional[int]
