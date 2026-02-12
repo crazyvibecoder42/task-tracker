@@ -63,6 +63,7 @@ class UserResponse(BaseModel):
     is_active: bool
     email_verified: bool
     created_at: datetime
+    last_login_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

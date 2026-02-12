@@ -23,7 +23,7 @@ The task tracker backend requires authentication for all API endpoints. Two auth
 The MCP server is configured via `.mcp.local.json` (gitignored) with the following environment variables:
 - `TASK_TRACKER_API_URL`: Backend URL (http://localhost:6001)
 - `TASK_TRACKER_API_KEY`: API key for authentication (format: `ttk_live_<random>`)
-- `TASK_TRACKER_USER_ID`: User ID (1 for admin/aman)
+- `TASK_TRACKER_USER_ID`: User ID associated with the API key
 
 ### Creating New API Keys
 To create a new API key for the MCP server:
@@ -46,16 +46,6 @@ To create a new API key for the MCP server:
 3. Update `.mcp.local.json` with the new key and restart Claude Code.
 
 **Note:** After updating `.mcp.local.json`, you must restart Claude Code for changes to take effect.
-
-## Persona Configuration
-
-**Author/Owner ID:** `aman`
-
-**Project Assignment:** Task Tracker Enhancements - AI Agent Features (Project ID: 4)
-
-When interacting with the task-tracker backend API (http://localhost:6001), always use `author_id: 1` (aman) for:
-- Creating tasks (`POST /api/tasks`)
-- Creating comments (`POST /api/tasks/{id}/comments`)
 
 ## Task Workflow
 
@@ -211,7 +201,8 @@ mcp__task-tracker__take_ownership(task_id, force=False)
   - Query params: `due_after` (ISO 8601 datetime), `due_before` (ISO 8601 datetime), `overdue` (boolean)
   - Example: `curl "http://localhost:6001/api/tasks?due_after=2026-02-01T00:00:00Z&due_before=2026-03-01T23:59:59Z"`
 - `POST /api/tasks` - Create task with time tracking fields
-  - Body: `{"title": "...", "due_date": "2026-02-25T14:00:00Z", "estimated_hours": 10.0, "author_id": 1}`
+  - Body: `{"title": "...", "due_date": "2026-02-25T14:00:00Z", "estimated_hours": 10.0}`
+  - Note: `author_id` is automatically set to the authenticated user
 - `PUT /api/tasks/{id}` - Update task with actual hours
   - Body: `{"actual_hours": 8.5}`
 

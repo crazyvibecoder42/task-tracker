@@ -267,6 +267,8 @@ async def list_tools() -> list[Tool]:
              }, "required": ["comment_id"]}),
         Tool(name="list_users", description="List all users (admin only). Returns users with role, email, and activity status.",
              inputSchema={"type": "object", "properties": {}, "required": []}),
+        Tool(name="get_current_user", description="Get the currently authenticated user's information",
+             inputSchema={"type": "object", "properties": {}, "required": []}),
         Tool(name="list_authors", description="DEPRECATED: Use list_users instead. Alias for backward compatibility.",
              inputSchema={"type": "object", "properties": {}, "required": []}),
         # Note: create_author removed - use admin UI or /api/auth/register for user creation
@@ -511,6 +513,8 @@ Example: list_actionable_tasks(project_id=4, priority='P0', limit=10)"""
         result = await api_request("DELETE", f"/api/comments/{arguments['comment_id']}")
     elif name == "list_users":
         result = await api_request("GET", "/api/users")
+    elif name == "get_current_user":
+        result = await api_request("GET", "/api/auth/me")
     elif name == "list_authors":
         # Backward compatibility alias - returns original array shape
         # Deprecation warning logged to stderr (not in response to preserve API contract)
