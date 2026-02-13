@@ -236,8 +236,8 @@ def test_transfer_with_task_owners_not_in_team(
     test_db: Session,
     auth_headers: dict
 ):
-    """Test that transfer fails if task owners are not in target team (400)."""
-    logger.debug("Testing transfer with task owners not in team")
+    """Test that transfer auto-unassigns tasks with owners not in target team."""
+    logger.debug("Testing transfer auto-unassigns task owners not in team")
 
     # Create task owned by regular_user (who is NOT in team)
     task = models.Task(
@@ -250,19 +250,36 @@ def test_transfer_with_task_owners_not_in_team(
     )
     test_db.add(task)
     test_db.commit()
+    task_id = task.id
 
-    # Try to transfer project to team
+    # Transfer project to team (should auto-unassign task)
     response = client.put(
         f"/api/projects/{personal_project.id}/transfer",
         json={"team_id": team.id},
         headers=auth_headers
     )
 
-    assert response.status_code == 400, f"Expected 400, got {response.status_code}: {response.json()}"
-    detail = response.json()["detail"]
-    assert "Cannot transfer" in detail
-    assert "not members of team" in detail
-    logger.info("✓ Transfer correctly fails when task owners not in team")
+    assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.json()}"
+
+    # Verify task was auto-unassigned
+    test_db.expire_all()
+    task = test_db.query(models.Task).filter(models.Task.id == task_id).first()
+    assert task.owner_id is None, f"Expected task to be unassigned, got owner_id={task.owner_id}"
+
+    # Verify TaskEvent was created
+    event = test_db.query(models.TaskEvent).filter(
+        models.TaskEvent.task_id == task_id,
+        models.TaskEvent.event_type == "ownership_change"
+    ).order_by(models.TaskEvent.created_at.desc()).first()
+
+    assert event is not None, "Expected ownership_change event to be created"
+    assert event.old_value == str(regular_user.id), f"Expected old_value={str(regular_user.id)} (user ID as string for consistency)"
+    assert event.new_value is None, "Expected new_value=None for unassignment"
+    assert event.event_metadata["reason"] == "project_team_transfer"
+    assert event.event_metadata["target_team_id"] == team.id
+    assert event.event_metadata["original_owner_id"] == regular_user.id
+
+    logger.info("✓ Transfer correctly auto-unassigns tasks with owners not in team")
 
 
 # ============== Migration Tests - Team → Personal (4 tests) ==============
@@ -486,7 +503,7 @@ def test_personal_to_team_sets_team_id(
     logger.info("✓ Personal → Team correctly sets team_id")
 
 
-def test_personal_to_team_fails_if_task_owner_not_in_team(
+def test_personal_to_team_auto_unassigns_invalid_owners(
     client: TestClient,
     personal_project: models.Project,
     team: models.Team,
@@ -495,8 +512,8 @@ def test_personal_to_team_fails_if_task_owner_not_in_team(
     test_db: Session,
     auth_headers: dict
 ):
-    """Test that Personal → Team fails if task owner is not in target team."""
-    logger.debug("Testing Personal → Team: validation of task owners")
+    """Test that Personal → Team auto-unassigns tasks with owners not in target team."""
+    logger.debug("Testing Personal → Team: auto-unassign invalid owners")
 
     # Create task owned by regular_user (who is NOT in team)
     task = models.Task(
@@ -509,19 +526,33 @@ def test_personal_to_team_fails_if_task_owner_not_in_team(
     )
     test_db.add(task)
     test_db.commit()
+    task_id = task.id
 
-    # Try to transfer to team
+    # Transfer to team (should auto-unassign)
     response = client.put(
         f"/api/projects/{personal_project.id}/transfer",
         json={"team_id": team.id},
         headers=auth_headers
     )
 
-    assert response.status_code == 400, f"Expected 400, got {response.status_code}: {response.json()}"
-    detail = response.json()["detail"]
-    assert "Cannot transfer" in detail
-    assert regular_user.name in detail or regular_user.email in detail
-    logger.info("✓ Personal → Team correctly validates task owners")
+    assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.json()}"
+
+    # Verify task was auto-unassigned
+    test_db.expire_all()
+    task = test_db.query(models.Task).filter(models.Task.id == task_id).first()
+    assert task.owner_id is None, f"Expected task to be unassigned, got owner_id={task.owner_id}"
+
+    # Verify TaskEvent created with correct payload
+    event = test_db.query(models.TaskEvent).filter(
+        models.TaskEvent.task_id == task_id,
+        models.TaskEvent.event_type == "ownership_change"
+    ).first()
+
+    assert event is not None, "Expected ownership_change event"
+    assert event.new_value is None, "Expected new_value=None for unassignment"
+    assert event.event_metadata["reason"] == "project_team_transfer"
+
+    logger.info("✓ Personal → Team correctly auto-unassigns invalid owners")
 
 
 # ============== Migration Tests - Team → Team (3 tests) ==============
@@ -594,7 +625,7 @@ def test_team_to_team_updates_team_id(
     logger.info("✓ Team → Team correctly updates team_id")
 
 
-def test_team_to_team_validates_task_owners(
+def test_team_to_team_auto_unassigns_invalid_owners(
     client: TestClient,
     team_project: models.Project,
     another_team: models.Team,
@@ -603,8 +634,8 @@ def test_team_to_team_validates_task_owners(
     test_db: Session,
     auth_headers: dict
 ):
-    """Test that Team → Team validates task owners are in new team."""
-    logger.debug("Testing Team → Team: validates task owners in new team")
+    """Test that Team → Team auto-unassigns tasks with owners not in new team."""
+    logger.debug("Testing Team → Team: auto-unassigns invalid owners")
 
     # Create task owned by regular_user (who is NOT in another_team)
     task = models.Task(
@@ -617,24 +648,29 @@ def test_team_to_team_validates_task_owners(
     )
     test_db.add(task)
     test_db.commit()
+    task_id = task.id
 
-    # Try to transfer to another_team
+    # Transfer to another_team (should auto-unassign)
     response = client.put(
         f"/api/projects/{team_project.id}/transfer",
         json={"team_id": another_team.id},
         headers=auth_headers
     )
 
-    assert response.status_code == 400, f"Expected 400, got {response.status_code}: {response.json()}"
-    detail = response.json()["detail"]
-    assert "Cannot transfer" in detail
-    logger.info("✓ Team → Team correctly validates task owners")
+    assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.json()}"
+
+    # Verify task was auto-unassigned
+    test_db.expire_all()
+    task = test_db.query(models.Task).filter(models.Task.id == task_id).first()
+    assert task.owner_id is None, f"Expected task to be unassigned, got owner_id={task.owner_id}"
+
+    logger.info("✓ Team → Team correctly auto-unassigns invalid owners")
 
 
 # ============== Edge Cases (3 tests) ==============
 
 
-def test_transfer_validates_all_task_owners(
+def test_transfer_auto_unassigns_all_invalid_owners(
     client: TestClient,
     personal_project: models.Project,
     team: models.Team,
@@ -644,8 +680,8 @@ def test_transfer_validates_all_task_owners(
     test_db: Session,
     auth_headers: dict
 ):
-    """Test that transfer validates ALL task owners, not just one."""
-    logger.debug("Testing transfer validates all task owners")
+    """Test that transfer auto-unassigns ALL tasks with invalid owners."""
+    logger.debug("Testing transfer auto-unassigns all invalid owners")
 
     # Create tasks owned by different users (not in team)
     task1 = models.Task(
@@ -664,19 +700,106 @@ def test_transfer_validates_all_task_owners(
     )
     test_db.add_all([task1, task2])
     test_db.commit()
+    task1_id = task1.id
+    task2_id = task2.id
 
-    # Try to transfer to team
+    # Transfer to team (should auto-unassign both tasks)
     response = client.put(
         f"/api/projects/{personal_project.id}/transfer",
         json={"team_id": team.id},
         headers=auth_headers
     )
 
-    assert response.status_code == 400, f"Expected 400, got {response.status_code}: {response.json()}"
-    detail = response.json()["detail"]
-    # Should mention multiple invalid owners
-    assert "Cannot transfer" in detail
-    logger.info("✓ Transfer correctly validates all task owners")
+    assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.json()}"
+
+    # Verify both tasks were auto-unassigned
+    test_db.expire_all()
+    task1 = test_db.query(models.Task).filter(models.Task.id == task1_id).first()
+    task2 = test_db.query(models.Task).filter(models.Task.id == task2_id).first()
+
+    assert task1.owner_id is None, f"Expected task1 to be unassigned, got owner_id={task1.owner_id}"
+    assert task2.owner_id is None, f"Expected task2 to be unassigned, got owner_id={task2.owner_id}"
+
+    # Verify TaskEvents created for both
+    events = test_db.query(models.TaskEvent).filter(
+        models.TaskEvent.task_id.in_([task1_id, task2_id]),
+        models.TaskEvent.event_type == "ownership_change"
+    ).all()
+
+    assert len(events) == 2, f"Expected 2 ownership_change events, got {len(events)}"
+    for event in events:
+        assert event.new_value is None, "Expected new_value=None for unassignment"
+        assert event.event_metadata["reason"] == "project_team_transfer"
+
+    logger.info("✓ Transfer correctly auto-unassigns all invalid owners")
+
+
+def test_transfer_keeps_valid_owners_assigned(
+    client: TestClient,
+    personal_project: models.Project,
+    team: models.Team,
+    admin_user: models.User,
+    regular_user: models.User,
+    test_db: Session,
+    auth_headers: dict
+):
+    """Test that transfer keeps tasks assigned when owners ARE in target team."""
+    logger.debug("Testing transfer keeps valid owners assigned")
+
+    # Add regular_user to team
+    team_member = models.TeamMember(
+        team_id=team.id,
+        user_id=regular_user.id,
+        role="member"
+    )
+    test_db.add(team_member)
+
+    # Create tasks with mixed ownership
+    task_valid = models.Task(
+        title="Valid Owner Task",
+        project_id=personal_project.id,
+        author_id=admin_user.id,
+        owner_id=admin_user.id,  # admin IS in team
+        status=models.TaskStatus.todo
+    )
+    task_also_valid = models.Task(
+        title="Also Valid Owner Task",
+        project_id=personal_project.id,
+        author_id=admin_user.id,
+        owner_id=regular_user.id,  # regular_user now in team
+        status=models.TaskStatus.todo
+    )
+    test_db.add_all([task_valid, task_also_valid])
+    test_db.commit()
+    task_valid_id = task_valid.id
+    task_also_valid_id = task_also_valid.id
+
+    # Transfer to team
+    response = client.put(
+        f"/api/projects/{personal_project.id}/transfer",
+        json={"team_id": team.id},
+        headers=auth_headers
+    )
+
+    assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.json()}"
+
+    # Verify tasks still have their owners (NOT unassigned)
+    test_db.expire_all()
+    task_valid = test_db.query(models.Task).filter(models.Task.id == task_valid_id).first()
+    task_also_valid = test_db.query(models.Task).filter(models.Task.id == task_also_valid_id).first()
+
+    assert task_valid.owner_id == admin_user.id, "Task owned by team member should stay assigned"
+    assert task_also_valid.owner_id == regular_user.id, "Task owned by team member should stay assigned"
+
+    # Verify NO ownership_change events created for these tasks
+    events = test_db.query(models.TaskEvent).filter(
+        models.TaskEvent.task_id.in_([task_valid_id, task_also_valid_id]),
+        models.TaskEvent.event_type == "ownership_change"
+    ).count()
+
+    assert events == 0, "No ownership_change events should be created for valid owners"
+
+    logger.info("✓ Transfer correctly keeps valid owners assigned")
 
 
 def test_transfer_works_with_no_tasks(

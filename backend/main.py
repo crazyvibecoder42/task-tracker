@@ -1178,7 +1178,7 @@ def transfer_project_team(
     )
 
     if new_team_id is not None:
-        # Transferring TO team: Validate all task owners are team members
+        # Transferring TO team: Auto-unassign tasks with owners not in target team
         team_member_ids = {
             tm.user_id for tm in
             db.query(models.TeamMember.user_id)
@@ -1186,18 +1186,42 @@ def transfer_project_team(
             .all()
         }
 
-        invalid_owners = []
+        tasks_to_unassign = []
         for task in tasks_with_owners:
             if task.owner_id not in team_member_ids:
-                owner = db.query(models.User).filter(models.User.id == task.owner_id).first()
-                invalid_owners.append(f"Task #{task.id} (owner: {owner.email if owner else task.owner_id})")
+                tasks_to_unassign.append(task)
 
-        if invalid_owners:
-            target_team_name = target_team.name
-            raise HTTPException(
-                status_code=400,
-                detail=f"Cannot transfer: The following tasks have owners who are not members of team {target_team_name}: {', '.join(invalid_owners[:5])}{'...' if len(invalid_owners) > 5 else ''}"
+        # Auto-unassign tasks with invalid owners
+        if tasks_to_unassign:
+            logger.info(
+                f"Auto-unassigning {len(tasks_to_unassign)} tasks during project transfer "
+                f"(project_id={project_id}, new_team_id={new_team_id})"
             )
+
+            for task in tasks_to_unassign:
+                # Store original owner_id before unassigning
+                original_owner_id = task.owner_id
+
+                # Unassign task
+                task.owner_id = None
+
+                # Create event record (consistent with other ownership_change events)
+                event = models.TaskEvent(
+                    task_id=task.id,
+                    event_type="ownership_change",
+                    actor_id=current_user.id,
+                    field_name="owner_id",
+                    old_value=str(original_owner_id),  # Consistent format: user ID as string
+                    new_value=None,  # NULL = unassigned (reason in metadata)
+                    event_metadata={
+                        "reason": "project_team_transfer",
+                        "target_team_id": new_team_id,
+                        "original_owner_id": original_owner_id  # ID preserved in metadata
+                    }
+                )
+                db.add(event)
+
+                logger.debug(f"Unassigned task #{task.id} (owner_id: {original_owner_id})")
 
     # 6. Handle ProjectMember migrations
     if old_team_id is not None and new_team_id is None:

@@ -280,6 +280,36 @@ export const changePassword = (data: ChangePasswordRequest) =>
     body: JSON.stringify(data)
   });
 
+// API Keys
+export interface ApiKey {
+  id: number;
+  name: string;
+  key?: string;  // Only present immediately after creation
+  expires_at: string | null;
+  created_at: string;
+  last_used_at: string | null;
+  is_active: boolean;
+}
+
+export interface CreateApiKeyRequest {
+  name: string;
+  expires_days?: number;  // 1-365 or omit for never expires
+}
+
+export const createApiKey = (data: CreateApiKeyRequest) =>
+  fetchApi<ApiKey>('/api/auth/api-keys', {
+    method: 'POST',
+    body: JSON.stringify(data)
+  });
+
+export const listApiKeys = () =>
+  fetchApi<ApiKey[]>('/api/auth/api-keys');
+
+export const revokeApiKey = (keyId: number) =>
+  fetchApi<void>(`/api/auth/api-keys/${keyId}`, {
+    method: 'DELETE'
+  });
+
 // Users (renamed from Authors)
 export const getAuthors = () => fetchApi<Author[]>('/api/users');
 export const createAuthor = (data: { name: string; email: string; password: string }) =>

@@ -294,7 +294,13 @@ async def list_tools() -> list[Tool]:
              inputSchema={"type": "object", "properties": {}, "required": []}),
         Tool(name="list_authors", description="DEPRECATED: Use list_users instead. Alias for backward compatibility.",
              inputSchema={"type": "object", "properties": {}, "required": []}),
-        # Note: create_author removed - use admin UI or /api/auth/register for user creation
+        Tool(name="create_user", description="Create a new user (admin only). Requires admin privileges to execute.",
+             inputSchema={"type": "object", "properties": {
+                 "name": {"type": "string", "description": "User's full name"},
+                 "email": {"type": "string", "description": "Unique email address"},
+                 "password": {"type": "string", "description": "Password (minimum 8 characters)"},
+                 "role": {"type": "string", "enum": ["admin", "editor", "viewer"], "description": "User role (default: editor)"}
+             }, "required": ["name", "email", "password"]}),
         Tool(name="get_stats", description="Get overall task tracker statistics",
              inputSchema={"type": "object", "properties": {}, "required": []}),
         Tool(name="get_task_events", description="Get timeline of events for a task with optional filtering",
@@ -553,6 +559,38 @@ Example: list_actionable_tasks(project_id=4, priority='P0', limit=10)"""
         import sys
         print("WARNING: list_authors is deprecated, use list_users instead", file=sys.stderr)
         result = await api_request("GET", "/api/users")
+    elif name == "create_user":
+        # Validate required fields exist
+        required_fields = ["name", "email", "password"]
+        missing_fields = [field for field in required_fields if field not in arguments]
+        if missing_fields:
+            result = {
+                "error": "Missing required fields",
+                "detail": f"Required fields missing: {', '.join(missing_fields)}"
+            }
+        else:
+            # Validate role
+            role = arguments.get("role", "editor")
+            valid_roles = ["admin", "editor", "viewer"]
+            if role not in valid_roles:
+                result = {
+                    "error": "Invalid role",
+                    "detail": f"Role must be one of: {', '.join(valid_roles)}"
+                }
+            # Validate password length
+            elif len(arguments["password"]) < 8:
+                result = {
+                    "error": "Password too short",
+                    "detail": "Password must be at least 8 characters"
+                }
+            else:
+                data = {
+                    "name": arguments["name"],
+                    "email": arguments["email"],
+                    "password": arguments["password"],
+                    "role": role
+                }
+                result = await api_request("POST", "/api/users", data)
     elif name == "get_stats":
         result = await api_request("GET", "/api/stats")
     elif name == "get_task_events":
