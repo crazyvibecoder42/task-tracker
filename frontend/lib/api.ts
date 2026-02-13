@@ -267,6 +267,19 @@ async function fetchApi<T>(endpoint: string, options?: RequestInit, retryCount =
   return response.json();
 }
 
+// Authentication
+export interface ChangePasswordRequest {
+  current_password: string;
+  new_password: string;
+  confirm_password: string;
+}
+
+export const changePassword = (data: ChangePasswordRequest) =>
+  fetchApi<{ message: string }>('/api/auth/change-password', {
+    method: 'PUT',
+    body: JSON.stringify(data)
+  });
+
 // Users (renamed from Authors)
 export const getAuthors = () => fetchApi<Author[]>('/api/users');
 export const createAuthor = (data: { name: string; email: string; password: string }) =>
@@ -284,6 +297,17 @@ export const updateProject = (id: number, data: { name?: string; description?: s
   fetchApi<Project>('/api/projects/' + id, { method: 'PUT', body: JSON.stringify(data) });
 export const deleteProject = (id: number) =>
   fetchApi<void>('/api/projects/' + id, { method: 'DELETE' });
+
+// Project Team Transfer
+export interface ProjectTeamTransfer {
+  team_id: number | null;  // null = convert to personal project
+}
+
+export const transferProject = (id: number, data: ProjectTeamTransfer) =>
+  fetchApi<Project>('/api/projects/' + id + '/transfer', {
+    method: 'PUT',
+    body: JSON.stringify(data)
+  });
 
 // Project Members
 export interface ProjectMember {

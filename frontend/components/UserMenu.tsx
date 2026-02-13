@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { LogOut, User, ChevronUp } from 'lucide-react';
+import { LogOut, User, ChevronUp, Settings } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 
 export default function UserMenu() {
@@ -95,6 +95,14 @@ export default function UserMenu() {
                 {user.role.charAt(0).toUpperCase() + user.role.slice(1)}
               </span>
             </div>
+
+            <button
+              onClick={() => router.push('/settings')}
+              className="w-full flex items-center gap-2 px-2 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+            >
+              <Settings className="w-4 h-4" />
+              Settings
+            </button>
 
             <button
               onClick={handleLogout}

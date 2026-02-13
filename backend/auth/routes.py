@@ -50,6 +50,12 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(..., min_length=8, max_length=100)
+    confirm_password: str
+
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
@@ -431,6 +437,72 @@ async def get_current_user_info(current_user: User = Depends(get_current_user)):
     """
     logger.debug(f"Fetching user info for: {current_user.email}")
     return current_user
+
+
+@router.put("/change-password", status_code=status.HTTP_200_OK)
+async def change_password(
+    request: ChangePasswordRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Change password for the current authenticated user.
+
+    Args:
+        request: Password change data
+        current_user: Authenticated user from dependency
+        db: Database session
+
+    Returns:
+        Success message
+
+    Raises:
+        HTTPException: 400 if passwords don't match or new password same as current
+        HTTPException: 401 if current password incorrect
+    """
+    logger.debug(f"Password change request for user: {current_user.email}")
+
+    # Validation 1: Check passwords match
+    if request.new_password != request.confirm_password:
+        logger.info(f"Password change failed: passwords don't match for user {current_user.email}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New password and confirmation password do not match",
+        )
+
+    # Validation 2: Verify current password
+    password_hash = getattr(current_user, "password_hash", None)
+    if not password_hash:
+        logger.info(f"Password change failed: user has no password set: {current_user.email}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Current password not set",
+        )
+
+    if not verify_password(request.current_password, password_hash):
+        logger.info(f"Password change failed: current password incorrect for user {current_user.email}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Current password is incorrect",
+        )
+
+    # Validation 3: Ensure new password is different
+    if verify_password(request.new_password, password_hash):
+        logger.info(f"Password change failed: new password same as current for user {current_user.email}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New password must be different from current password",
+        )
+
+    # Hash and update password
+    logger.debug(f"Hashing new password for user {current_user.email}")
+    new_password_hash = hash_password(request.new_password)
+    setattr(current_user, "password_hash", new_password_hash)
+
+    db.commit()
+
+    logger.critical(f"Password changed successfully for user: {current_user.email} (ID: {current_user.id})")
+    return {"message": "Password changed successfully"}
 
 
 @router.post("/api-keys", response_model=ApiKeyResponse, status_code=status.HTTP_201_CREATED)
