@@ -62,10 +62,10 @@ class User(Base):
     owned_tasks = relationship("Task", foreign_keys="Task.owner_id", back_populates="owner")
     comments = relationship("Comment", back_populates="author")
     events = relationship("TaskEvent", back_populates="actor")
-    project_memberships = relationship("ProjectMember", back_populates="user")
-    api_keys = relationship("ApiKey", back_populates="user")
-    refresh_tokens = relationship("RefreshToken", back_populates="user")
-    team_memberships = relationship("TeamMember", back_populates="user")
+    project_memberships = relationship("ProjectMember", back_populates="user", cascade="all, delete-orphan")
+    api_keys = relationship("ApiKey", back_populates="user", cascade="all, delete-orphan")
+    refresh_tokens = relationship("RefreshToken", back_populates="user", cascade="all, delete-orphan")
+    team_memberships = relationship("TeamMember", back_populates="user", cascade="all, delete-orphan")
     created_teams = relationship("Team", foreign_keys="Team.created_by", back_populates="creator")
 
 
