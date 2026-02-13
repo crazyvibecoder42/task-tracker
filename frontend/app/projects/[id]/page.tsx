@@ -12,6 +12,7 @@ import {
   MessageSquare,
   Plus,
   Search,
+  Settings,
   Sparkles,
   Trash2
 } from 'lucide-react';
@@ -233,6 +234,20 @@ export default function ProjectDetail() {
           {project.description && (
             <p className="text-gray-600 mt-1">{project.description}</p>
           )}
+          {project.team && (
+            <div className="flex items-center gap-2 mt-2">
+              <span className="text-sm text-gray-500">Team:</span>
+              <Link
+                href={`/teams/${project.team.id}`}
+                className="inline-flex items-center gap-1 px-2 py-1 text-sm bg-indigo-50 text-indigo-700 rounded-md hover:bg-indigo-100"
+              >
+                {project.team.name}
+              </Link>
+            </div>
+          )}
+          {!project.team && (
+            <p className="text-sm text-gray-500 mt-2">Personal Project</p>
+          )}
           {project.author && (
             <p className="text-sm text-gray-500 mt-2">
               Created by {project.author.name}
@@ -246,6 +261,13 @@ export default function ProjectDetail() {
           >
             <Grid3x3 className="w-5 h-5" />
             Board View
+          </Link>
+          <Link
+            href={`/projects/${projectId}/settings`}
+            className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 flex items-center gap-2"
+          >
+            <Settings className="w-5 h-5" />
+            Settings
           </Link>
           <button
             onClick={handleDeleteProject}
