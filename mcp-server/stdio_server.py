@@ -301,6 +301,32 @@ async def list_tools() -> list[Tool]:
                  "password": {"type": "string", "description": "Password (minimum 8 characters)"},
                  "role": {"type": "string", "enum": ["admin", "editor", "viewer"], "description": "User role (default: editor)"}
              }, "required": ["name", "email", "password"]}),
+        Tool(
+            name="generate_mcp_config",
+            description="Generate complete MCP configuration with API key. Creates a new API key and returns ready-to-use .mcp.json config. Optionally generate config for another user (admin only).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "key_name": {
+                        "type": "string",
+                        "description": "Name for the API key (e.g., 'Dev Machine', 'CI Pipeline')"
+                    },
+                    "user_id": {
+                        "type": "integer",
+                        "description": "Generate config for specific user (admin only). Omit to generate for current user."
+                    },
+                    "api_url": {
+                        "type": "string",
+                        "description": "Custom API URL (default: http://localhost:6001)"
+                    },
+                    "expires_days": {
+                        "type": "integer",
+                        "description": "API key expiration in days (default: 365, max: 365)"
+                    }
+                },
+                "required": ["key_name"]
+            }
+        ),
         Tool(name="get_stats", description="Get overall task tracker statistics",
              inputSchema={"type": "object", "properties": {}, "required": []}),
         Tool(name="get_task_events", description="Get timeline of events for a task with optional filtering",
@@ -591,6 +617,125 @@ Example: list_actionable_tasks(project_id=4, priority='P0', limit=10)"""
                     "role": role
                 }
                 result = await api_request("POST", "/api/users", data)
+    elif name == "generate_mcp_config":
+        # Validate required fields
+        if "key_name" not in arguments:
+            result = {
+                "error": "Missing required field",
+                "detail": "key_name is required"
+            }
+        else:
+            try:
+                # Extract parameters
+                key_name = arguments["key_name"]
+                target_user_id = arguments.get("user_id")  # Optional
+                api_url = arguments.get("api_url", "http://localhost:6001")
+                expires_days = arguments.get("expires_days", 365)
+
+                # Validate expires_days range
+                if expires_days and (expires_days < 1 or expires_days > 365):
+                    result = {
+                        "error": "Invalid expiration",
+                        "detail": "expires_days must be between 1 and 365"
+                    }
+                else:
+                    # Get current user info first
+                    me_response = await api_request("GET", "/api/auth/me")
+                    if "error" in me_response:
+                        result = me_response
+                    else:
+                        current_user = me_response
+
+                        # Determine which user to generate config for
+                        if target_user_id:
+                            # Admin-only: generating for another user
+                            if current_user.get("role") != "admin":
+                                result = {
+                                    "error": "Permission denied",
+                                    "detail": "Admin privileges required to generate config for other users"
+                                }
+                            else:
+                                config_user_id = target_user_id
+                        else:
+                            # Generate for current user
+                            config_user_id = current_user["id"]
+
+                        # Create API key (only if no error so far)
+                        if "error" not in result:
+                            key_data = {
+                                "name": key_name,
+                                "expires_days": expires_days
+                            }
+                            key_response = await api_request("POST", "/api/auth/api-keys", key_data)
+
+                            if "error" in key_response:
+                                result = key_response
+                            else:
+                                # Extract raw API key (only available on creation)
+                                raw_key = key_response.get("key")
+                                if not raw_key:
+                                    result = {
+                                        "error": "API key creation failed",
+                                        "detail": "No key returned from API"
+                                    }
+                                else:
+                                    # Generate .mcp.json configuration
+                                    mcp_config = {
+                                        "mcpServers": {
+                                            "task-tracker": {
+                                                "command": "python3",
+                                                "args": ["./mcp-server/stdio_server.py"],
+                                                "env": {
+                                                    "TASK_TRACKER_API_URL": api_url,
+                                                    "TASK_TRACKER_API_KEY": raw_key,
+                                                    "TASK_TRACKER_USER_ID": str(config_user_id)
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    # Format response with instructions
+                                    config_json = json.dumps(mcp_config, indent=2)
+
+                                    if target_user_id and target_user_id != current_user["id"]:
+                                        user_note = f"\n✓ Configuration generated for user ID: {config_user_id}"
+                                    else:
+                                        user_note = "\n✓ Configuration generated for current user"
+
+                                    instructions = f"""
+MCP Configuration Generated Successfully!
+{user_note}
+
+API Key Details:
+- Name: {key_name}
+- Key ID: {key_response['id']}
+- Expires: {key_response.get('expires_at', 'Never')}
+
+=== COPY THIS CONFIGURATION ===
+
+{config_json}
+
+=== SETUP INSTRUCTIONS ===
+
+1. Save the configuration above as .mcp.json in one of these locations:
+   • Project root: ~/your-project/.mcp.json
+   • User config: ~/.claude/.mcp.json
+
+2. Install MCP server dependencies:
+   cd mcp-server
+   pip install -r requirements.txt
+
+3. Restart Claude Code to load the new configuration
+
+4. Verify connection by calling any MCP tool (e.g., list_projects)
+
+⚠️  SECURITY: Save this configuration securely. The API key cannot be retrieved later.
+"""
+
+                                    result = {"config": instructions}
+
+            except Exception as e:
+                result = {"error": "Failed to generate config", "detail": str(e)}
     elif name == "get_stats":
         result = await api_request("GET", "/api/stats")
     elif name == "get_task_events":
