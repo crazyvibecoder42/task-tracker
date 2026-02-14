@@ -1,19 +1,31 @@
 # Task Tracker
 
-A full-stack task tracking system with PostgreSQL, FastAPI backend, Next.js frontend, and MCP server for programmatic access.
+A full-stack task management application designed for AI agent workflows with advanced features like hierarchical subtasks, task dependencies, time tracking, and comprehensive MCP (Model Context Protocol) integration.
 
 ## Features
 
-- **Projects**: Create and manage projects
-- **Tasks**: Track tasks with tags (bug, feature, idea), priorities (P0, P1), and 6-status workflow system
-- **6-Status Workflow**: Tasks progress through `backlog` → `todo` → `in_progress` → `review` → `done`, with `blocked` as a temporary state
-- **Event Tracking**: Comprehensive audit trail and timeline for all task operations
-- **Task Dependencies**: Create blocking relationships between tasks with circular dependency detection
-- **Hierarchical Subtasks**: Break down tasks into subtasks with automatic progress tracking
-- **Comments**: Add comments to tasks with author attribution
-- **Authors**: Manage team members/authors
-- **Dashboard**: Overview with statistics and completion rate
-- **MCP Server**: Programmatic access to manage tasks via Claude or other MCP clients
+### Core Task Management
+- **Hierarchical Subtasks** - Break down tasks into smaller, manageable subtasks with automatic progress tracking
+- **Task Dependencies** - Define blocking relationships between tasks with circular dependency detection (BFS algorithm)
+- **Time Tracking** - Track estimated hours, actual hours, and due dates with overdue detection
+- **6-Status Workflow** - Tasks progress through `backlog` → `todo` → `in_progress` → `blocked` → `review` → `done`
+- **Rich Context** - Full-text search across tasks, projects, and comments
+- **Event Timeline** - Comprehensive audit trail for all task operations with detailed metadata
+
+### Team Collaboration
+- **Team Management** - Create teams with admin/member roles for better organization
+- **Project Organization** - Team projects or personal projects with flexible ownership
+- **Task Assignment** - Assign tasks to team members with ownership tracking
+- **Comments & Discussion** - Threaded comments on tasks with author attribution
+- **Assignable Users** - Query users who can be assigned tasks in a project
+
+### AI Agent Integration
+- **MCP Server** - 40+ tools for programmatic task management via Claude Code or other MCP clients
+- **Bulk Operations** - Create, update, or delete multiple tasks in a single transaction
+- **Actionable Tasks Query** - Find unblocked tasks ready to work on (excludes backlog, blocked, done)
+- **Dependency-Aware Queries** - Automatically exclude blocked tasks from actionable queries
+- **API Key Authentication** - Secure authentication for AI agents separate from user sessions
+- **Generate MCP Config** - Programmatically generate MCP configuration with API keys
 
 ## Tech Stack
 
@@ -48,6 +60,14 @@ docker compose down
 ```
 
 This uses `docker-compose.override.yml` which provides development defaults automatically. No additional configuration needed!
+
+**Default Development Credentials:**
+- Email: `admin@example.com`
+- Password: `admin123`
+- User ID: `1`
+- Role: `admin`
+
+**⚠️ Note:** Fresh deployments from `init.sql` will seed this admin account with the default password. For production use, change this password immediately after first login.
 
 ### Environment Overview
 
@@ -349,92 +369,254 @@ With both environments configured, MCP tools will have separate prefixes:
 
 This allows you to work with both environments simultaneously without conflicts.
 
-### Available MCP Tools
+### Available MCP Tools (40+)
 
 **Project Management:**
 - `list_projects` - List all projects
 - `create_project` - Create a new project
 - `get_project` - Get project details with tasks
-- `get_project_stats` - Get project statistics
-- `update_project` - Update a project
-- `delete_project` - Delete a project
+- `get_project_stats` - Get project statistics (task counts, completion rates)
+- `update_project` - Update project details
+- `delete_project` - Delete a project and all its tasks
+- `list_assignable_users` - List users who can be assigned tasks in a project
+- `transfer_project_team` - Transfer project to different team or make personal
 
 **Task Management:**
-- `list_tasks` - List tasks with optional filters (project_id, status, priority, tag, owner_id)
-- `create_task` - Create a new task
+- `list_tasks` - List tasks with filters (project_id, status, priority, tag, owner_id, dates)
+- `list_actionable_tasks` - Get unblocked tasks ready for work (excludes backlog, blocked, done)
+- `list_overdue_tasks` - List tasks past their due date
+- `list_upcoming_tasks` - List tasks due within N days
+- `create_task` - Create a new task (supports subtasks via parent_task_id)
 - `get_task` - Get task details with comments
-- `update_task` - Update a task
+- `update_task` - Update task fields (status, priority, time tracking, etc.)
 - `complete_task` - Mark task as completed (sets status to `done`)
-- `take_ownership` - Assign task ownership to an author
+- `take_ownership` - Claim task ownership (assigns to authenticated user)
 - `delete_task` - Delete a task
-- `get_actionable_tasks` - Get unblocked tasks ready for work (excludes backlog, blocked, done)
+- `search` - Global search across tasks, projects, and comments
+
+**Subtasks & Dependencies:**
 - `get_task_dependencies` - Get task with full dependency information
 - `add_task_dependency` - Add a blocking dependency between tasks
 - `remove_task_dependency` - Remove a blocking dependency
 - `get_task_subtasks` - Get all subtasks of a task
 - `get_task_progress` - Get completion percentage based on subtasks
+
+**Bulk Operations:**
+- `bulk_create_tasks` - Create multiple tasks in a single transaction
+- `bulk_update_tasks` - Update multiple tasks at once
+- `bulk_delete_tasks` - Delete multiple tasks in a single transaction
+- `bulk_take_ownership` - Claim ownership of multiple tasks
+- `bulk_add_dependencies` - Add multiple task dependencies at once
+
+**Team Management:**
+- `list_teams` - List all teams
+- `create_team` - Create a new team (creator becomes admin)
+- `get_team` - Get team details with members and projects
+- `update_team` - Update team details (admin only)
+- `delete_team` - Delete a team (admin only)
+- `list_team_members` - List all members of a team
+- `add_team_member` - Add a user to a team (admin only)
+- `update_team_member` - Update team member role (admin only)
+- `remove_team_member` - Remove user from team (admin only)
+
+**User Management:**
+- `list_users` - List all users (admin only)
+- `create_user` - Create a new user (admin only)
+- `get_current_user` - Get authenticated user information
+
+**Events & Timeline:**
 - `get_task_events` - Get event history for a specific task
 - `get_project_events` - Get event history for all tasks in a project
 
-**Comment Management:**
+**Comments:**
 - `list_comments` - List comments for a task
 - `add_comment` - Add a comment to a task
 - `delete_comment` - Delete a comment
 
-**Author Management:**
-- `list_authors` - List all authors
-- `create_author` - Create a new author
+**Configuration:**
+- `generate_mcp_config` - Generate complete MCP configuration with API key
 
 **Statistics:**
-- `get_stats` - Get overall statistics
+- `get_stats` - Get overall task tracker statistics
 
-## API Endpoints
+## API Overview
 
-### Authors
-- `GET /api/authors` - List all authors
-- `POST /api/authors` - Create author
-- `GET /api/authors/{id}` - Get author
-- `PUT /api/authors/{id}` - Update author
-- `DELETE /api/authors/{id}` - Delete author
+### Authentication
+All endpoints require authentication via:
+- **JWT Bearer Token** - For web UI (login via `/api/auth/login`)
+- **API Key** - For MCP/programmatic access (send via `X-API-Key` header)
 
-### Projects
+### Key Endpoints
+
+#### Authentication
+- `POST /api/auth/login` - Login with email/password (returns JWT token)
+- `POST /api/auth/api-keys` - Create API key for programmatic access
+- `GET /api/auth/api-keys` - List user's API keys
+- `DELETE /api/auth/api-keys/{key_id}` - Revoke an API key
+
+#### Tasks
+- `GET /api/tasks` - List tasks with filtering (status, priority, owner, dates, search)
+- `POST /api/tasks` - Create task (supports `parent_task_id` for subtasks)
+- `GET /api/tasks/{id}` - Get task details with comments
+- `PUT /api/tasks/{id}` - Update task
+- `DELETE /api/tasks/{id}` - Delete task
+- `POST /api/tasks/{id}/take-ownership` - Claim task ownership
+- `POST /api/tasks/{id}/complete` - Mark task as done
+
+#### Subtasks & Progress
+- `GET /api/tasks/{id}/subtasks` - List subtasks
+- `GET /api/tasks/{id}/progress` - Get completion percentage
+
+#### Dependencies
+- `GET /api/tasks/{id}/dependencies` - Get task with dependency info
+- `POST /api/tasks/{id}/dependencies` - Add blocking relationship
+- `DELETE /api/tasks/{id}/dependencies/{blocking_id}` - Remove dependency
+- `GET /api/tasks/actionable` - Query unblocked, actionable tasks
+
+#### Time Tracking
+- `GET /api/tasks/overdue` - List overdue tasks
+- `GET /api/tasks/upcoming?days=7` - List tasks due soon
+
+#### Events
+- `GET /api/tasks/{id}/events` - Get task event history
+- `GET /api/projects/{id}/events` - Get project event timeline
+
+#### Projects
 - `GET /api/projects` - List all projects
 - `POST /api/projects` - Create project
 - `GET /api/projects/{id}` - Get project with tasks
 - `GET /api/projects/{id}/stats` - Get project statistics
 - `PUT /api/projects/{id}` - Update project
 - `DELETE /api/projects/{id}` - Delete project
+- `GET /api/projects/{id}/assignable-users` - List assignable users
+- `PUT /api/projects/{id}/transfer` - Transfer project to different team
 
-### Tasks
-- `GET /api/tasks` - List tasks (query params: project_id, status, priority, tag)
-- `POST /api/tasks` - Create task
-- `GET /api/tasks/{id}` - Get task with comments
-- `PUT /api/tasks/{id}` - Update task
-- `DELETE /api/tasks/{id}` - Delete task
+#### Teams
+- `GET /api/teams` - List all teams
+- `POST /api/teams` - Create team
+- `GET /api/teams/{id}` - Get team details
+- `PUT /api/teams/{id}` - Update team (admin only)
+- `DELETE /api/teams/{id}` - Delete team (admin only)
+- `GET /api/teams/{id}/members` - List team members
+- `POST /api/teams/{id}/members` - Add team member (admin only)
+- `PUT /api/teams/{id}/members/{user_id}` - Update member role (admin only)
+- `DELETE /api/teams/{id}/members/{user_id}` - Remove member (admin only)
 
-### Comments
+#### Users
+- `GET /api/users` - List all users (admin only)
+- `POST /api/users` - Create user (admin only)
+- `GET /api/users/me` - Get current user
+
+#### Comments
 - `GET /api/tasks/{task_id}/comments` - List comments
 - `POST /api/tasks/{task_id}/comments` - Create comment
-- `PUT /api/comments/{id}` - Update comment
 - `DELETE /api/comments/{id}` - Delete comment
 
-### Statistics
+#### Search
+- `GET /api/search?q=query` - Global search across tasks, projects, comments
+
+#### Statistics
 - `GET /api/stats` - Overall statistics
+
+See the [API documentation](http://localhost:6001/docs) (Swagger UI) for complete endpoint details.
+
+## Business Rules
+
+### Task Completion
+- Cannot mark task as `done` if it has incomplete subtasks
+- Cannot mark task as `done` if blocked by incomplete dependencies
+- Parent task requires all subtasks to be `done` before it can be marked `done`
+- Tasks in `backlog` or `done` status are excluded from actionable queries
+
+### Dependency Creation
+- No circular dependencies allowed (validated with BFS algorithm)
+- Parent task cannot block its own subtask (prevents deadlock)
+- Tasks must be in the same project
+- No self-blocking allowed
+
+### Time Tracking
+- All time fields (`due_date`, `estimated_hours`, `actual_hours`) are optional
+- **Overdue Definition:** `due_date < now AND status NOT IN ('done', 'backlog')`
+- **Progress Calculation:** `(actual_hours / estimated_hours) * 100`
+- Red indicator when over budget (actual > estimated)
+- Green indicator when under budget (actual <= estimated)
+
+### Validation Order
+1. Task existence (404 for missing entities)
+2. Same project constraint
+3. Circular dependency check (BFS algorithm)
+4. Parent-subtask deadlock check
+5. Status and completion validations
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                       Task Tracker                          │
+├─────────────────────────────────────────────────────────────┤
+│  Frontend (React/Next.js)                                   │
+│    ├─ Task Lists & Kanban Board                            │
+│    ├─ Dependency Visualization                             │
+│    ├─ Time Tracking & Progress                             │
+│    └─ Team & Project Management                            │
+├─────────────────────────────────────────────────────────────┤
+│  Backend (FastAPI)                                          │
+│    ├─ REST API (40+ endpoints)                             │
+│    ├─ JWT + API Key Authentication                         │
+│    ├─ Business Logic & Validation                          │
+│    │   ├─ Circular Dependency Detection (BFS)              │
+│    │   ├─ Parent-Subtask Validation                        │
+│    │   └─ Task Completion Rules                            │
+│    └─ Event Timeline Tracking                              │
+├─────────────────────────────────────────────────────────────┤
+│  Database (PostgreSQL)                                      │
+│    ├─ Tasks, Projects, Teams, Users                        │
+│    ├─ Task Dependencies                                     │
+│    ├─ Task Events (Audit Trail)                            │
+│    └─ Full-Text Search Indexes                             │
+├─────────────────────────────────────────────────────────────┤
+│  MCP Server (stdio)                                         │
+│    ├─ 40+ Tools for AI Agents                              │
+│    ├─ Bulk Operations                                       │
+│    └─ Actionable Tasks Query                               │
+└─────────────────────────────────────────────────────────────┘
+```
 
 ## Data Model
 
 ```
-Author
+User
 ├── id
 ├── name
 ├── email
+├── password_hash
+├── role (admin | editor | viewer)
+├── is_active
+├── email_verified
+├── last_login_at
 └── created_at
+
+Team
+├── id
+├── name
+├── description
+├── created_by → User
+├── created_at
+└── updated_at
+
+TeamMember
+├── team_id → Team
+├── user_id → User
+├── role (admin | member)
+└── joined_at
 
 Project
 ├── id
 ├── name
 ├── description
-├── author_id → Author
+├── author_id → User
+├── team_id → Team (nullable, for team projects)
+├── kanban_settings (JSONB)
 ├── created_at
 └── updated_at
 
@@ -446,9 +628,13 @@ Task
 ├── priority (P0 | P1)
 ├── status (backlog | todo | in_progress | blocked | review | done)
 ├── project_id → Project
-├── author_id → Author
-├── owner_id → Author
-├── parent_task_id → Task (for subtasks)
+├── author_id → User
+├── owner_id → User (nullable)
+├── parent_task_id → Task (nullable, for subtasks)
+├── due_date (datetime)
+├── estimated_hours (decimal)
+├── actual_hours (decimal)
+├── is_blocked (computed field)
 ├── created_at
 └── updated_at
 
@@ -456,7 +642,7 @@ TaskEvent
 ├── id
 ├── task_id → Task
 ├── event_type (task_created | status_change | field_update | ownership_change | dependency_added | dependency_removed | comment_added)
-├── actor_id → Author
+├── actor_id → User
 ├── field_name
 ├── old_value
 ├── new_value
@@ -471,12 +657,125 @@ Comment
 ├── id
 ├── content
 ├── task_id → Task
-├── author_id → Author
+├── author_id → User
 ├── created_at
 └── updated_at
+
+APIKey
+├── id
+├── user_id → User
+├── name
+├── key_hash
+├── key_prefix
+├── expires_at
+├── last_used_at
+└── created_at
 ```
 
+## Task Workflow Best Practices
+
+### Before Working on Tasks
+
+**IMPORTANT:** Always take ownership of a task before starting work on it:
+
+```bash
+# Take ownership via API
+curl -X POST http://localhost:6002/api/tasks/{task_id}/take-ownership \
+  -H "X-API-Key: your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{"force": false}'
+```
+
+Or use the MCP tool:
+```
+mcp__task-tracker__take_ownership(task_id, force=False)
+```
+
+**Note:** Ownership is always assigned to the authenticated user. This prevents privilege escalation.
+
+### Task Management Guidelines
+
+1. **Check actionable tasks** before claiming:
+   ```bash
+   curl http://localhost:6002/api/tasks/actionable
+   ```
+   Or use: `mcp__task-tracker__list_actionable_tasks()`
+
+2. **Take ownership** when you find a task to work on
+
+3. **Update task status** following the workflow:
+   - Tasks default to `todo` status when created
+   - **6-Status Workflow:** `backlog` → `todo` → `in_progress` → `review` → `done`
+   - Tasks can be marked as `blocked` (temporary state) when dependencies are incomplete
+   - Valid status values: `backlog`, `todo`, `in_progress`, `blocked`, `review`, `done`
+
+4. **Status Transition Best Practices:**
+   - Move task to `in_progress` when you start working on it
+   - Move to `review` when ready for review
+   - Move to `done` when fully completed (requires all subtasks to be done)
+   - Mark as `blocked` when waiting on dependencies
+
+5. **Respect dependencies:**
+   - Tasks with `is_blocked: true` cannot be marked as done
+   - Complete blocking tasks first
+   - Use actionable tasks endpoint to find unblocked work
+
+## Multi-Environment Benefits
+
+The task tracker supports **separate production and development environments** that can run simultaneously:
+
+| Feature | Production | Development |
+|---------|-----------|-------------|
+| Frontend Port | 3000 | 3001 |
+| Backend Port | 6001 | 6002 |
+| Database Port | 5432 | 5433 |
+| Database Name | tasktracker | tasktracker_dev |
+| Docker Volume | postgres_data | postgres_data_dev |
+
+**Benefits:**
+- ✅ Complete isolation - experiments never affect production
+- ✅ Data safety - development resets don't touch production
+- ✅ Parallel operation - run both environments simultaneously
+- ✅ Independent APIs - separate authentication and API keys
+- ✅ Easy reset - `make dev-reset` wipes development cleanly
+- ✅ Database isolation - separate databases prevent data corruption
+- ✅ Port separation - no conflicts when running both
+
 ## Development
+
+### Project Structure
+
+```
+task-tracker/
+├── backend/
+│   ├── app/
+│   │   ├── models/          # SQLAlchemy models
+│   │   ├── routes/          # API endpoints
+│   │   ├── schemas/         # Pydantic schemas
+│   │   ├── auth/            # Authentication & authorization
+│   │   └── main.py          # FastAPI app
+│   ├── init.sql             # Database schema (source of truth)
+│   └── requirements.txt
+├── frontend/
+│   ├── src/
+│   │   ├── components/      # React components
+│   │   ├── pages/           # Next.js pages
+│   │   └── lib/             # Utilities
+│   └── package.json
+├── mcp-server/
+│   ├── stdio_server.py      # MCP server implementation
+│   └── requirements.txt
+├── docker-compose.yml       # Base Docker config
+├── docker-compose.override.yml  # Development defaults
+├── docker-compose.prod.yml  # Production overrides
+├── docker-compose.dev.yml   # Development overrides (explicit)
+├── .env.production          # Production config (no secrets)
+├── .env.development        # Development config (safe defaults)
+├── .env.local              # Local secrets (gitignored)
+├── Makefile                # Convenience commands
+├── CLAUDE.md               # AI agent instructions
+└── README.md               # This file
+```
 
 ### Backend Development
 
@@ -494,6 +793,83 @@ npm install
 npm run dev
 ```
 
+### Database Access
+
+**Development:**
+```bash
+# Via Make
+make dev-db
+
+# Or direct connection
+psql postgresql://taskuser:taskpass@localhost:5433/tasktracker_dev
+```
+
+**Production:**
+```bash
+# Via Make
+make prod-db
+
+# Or direct connection
+psql postgresql://taskuser:taskpass@localhost:5432/tasktracker
+```
+
+**Common Queries:**
+```sql
+-- View tasks
+SELECT id, title, status, parent_task_id, project_id FROM tasks;
+
+-- View dependencies
+SELECT blocking_task_id, blocked_task_id FROM task_dependencies;
+
+-- View database size
+SELECT pg_database_size(current_database());
+```
+
+### Testing Backend Changes
+
+```bash
+# Restart backend after code changes
+make dev-restart backend
+
+# Test health endpoint
+curl http://localhost:6002/health
+
+# Test API endpoints
+curl http://localhost:6002/api/tasks \
+  -H "X-API-Key: your-api-key"
+
+# View logs
+make dev-logs
+```
+
+## Contributing
+
+This is an experimental project for AI agent task management. Contributions are welcome!
+
+### Development Workflow
+
+1. **Fork the repository**
+2. **Create a feature branch** from `main`
+3. **Make your changes** in the development environment
+4. **Test thoroughly** using the development environment
+5. **Submit a pull request** with a clear description
+
+### Code Style
+
+- **Backend:** Follow PEP 8 (Python), use type hints
+- **Frontend:** ESLint configuration, TypeScript strict mode
+- **Commits:** Use conventional commits (feat:, fix:, docs:, etc.)
+
+## Support
+
+For issues, questions, or contributions:
+- **GitHub Issues:** Create an issue in the repository
+- **Documentation:** See CLAUDE.md for AI agent integration details
+
 ## License
 
-MIT
+MIT License - see LICENSE file for details.
+
+---
+
+Built with ❤️ for AI agent workflows
