@@ -1,33 +1,24 @@
-version: '3.8'
+# Base Docker Compose Configuration
+# This file contains shared service definitions without environment-specific details
+# Use with docker-compose.prod.yml or docker-compose.dev.yml for complete configuration
+#
+# Production: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# Development: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+# Or use: make prod-start / make dev-start
 
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: task-tracker-db
-    environment:
-      POSTGRES_USER: taskuser
-      POSTGRES_PASSWORD: taskpass
-      POSTGRES_DB: tasktracker
-    ports:
-      - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./backend/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./backend/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U taskuser -d tasktracker"]
+      test: ["CMD-SHELL", "pg_isready -U taskuser"]
       interval: 5s
       timeout: 5s
       retries: 5
 
   backend:
     build: ./backend
-    container_name: task-tracker-backend
-    ports:
-      - "6001:6001"
-    # IMPORTANT: For production, set ENVIRONMENT and JWT_SECRET_KEY via environment variables
-    # For local development, use docker-compose.override.yml to load .env.development
-    environment:
-      DATABASE_URL: postgresql://taskuser:taskpass@postgres:5432/tasktracker
     depends_on:
       postgres:
         condition: service_healthy
@@ -38,21 +29,9 @@ services:
 
   frontend:
     build: ./frontend
-    container_name: task-tracker-frontend
-    ports:
-      - "3000:3000"
-    environment:
-      NEXT_PUBLIC_API_URL: http://localhost:6001
     depends_on:
       - backend
     volumes:
       - ./frontend:/app
       - /app/node_modules
       - /app/.next
-
-  # MCP Server is not run via Docker
-  # Use stdio_server.py directly via Claude Code MCP integration
-  # See .mcp.json and mcp-config.json for configuration
-
-volumes:
-  postgres_data:

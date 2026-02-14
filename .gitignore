@@ -55,8 +55,12 @@ coverage/
 # Local config files (never commit - contain API keys)
 .mcp.json
 .mcp.local.json
-# Template is OK to commit
+.mcp.prod.json
+.mcp.dev.json
+# Templates are OK to commit
 !.mcp.json.template
+!.mcp.prod.json.template
+!.mcp.dev.json.template
 
 # Screenshots
 *.png

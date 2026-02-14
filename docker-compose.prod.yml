@@ -1,0 +1,39 @@
+# Production Environment Configuration
+# Use with: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# Or: make prod-start
+#
+# Ports: Frontend=3000, Backend=6001, Database=5432
+# Database: tasktracker (volume: postgres_data)
+
+services:
+  postgres:
+    container_name: task-tracker-db-prod
+    environment:
+      POSTGRES_USER: taskuser
+      POSTGRES_PASSWORD: taskpass
+      POSTGRES_DB: tasktracker
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  backend:
+    container_name: task-tracker-backend-prod
+    ports:
+      - "6001:6001"
+    env_file:
+      - .env.production
+      - path: .env.local
+        required: false  # Optional: for local overrides and secrets
+    environment:
+      DATABASE_URL: postgresql://taskuser:taskpass@postgres:5432/tasktracker
+
+  frontend:
+    container_name: task-tracker-frontend-prod
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:6001
+
+volumes:
+  postgres_data:

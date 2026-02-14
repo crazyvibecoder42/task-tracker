@@ -1,0 +1,39 @@
+# Development Environment Configuration
+# Use with: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+# Or: make dev-start
+#
+# Ports: Frontend=3001, Backend=6002, Database=5433
+# Database: tasktracker_dev (volume: postgres_data_dev)
+
+services:
+  postgres:
+    container_name: task-tracker-db-dev
+    environment:
+      POSTGRES_USER: taskuser
+      POSTGRES_PASSWORD: taskpass
+      POSTGRES_DB: tasktracker_dev
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data_dev:/var/lib/postgresql/data
+
+  backend:
+    container_name: task-tracker-backend-dev
+    ports:
+      - "6002:6001"
+    env_file:
+      - .env.development
+      - path: .env.local
+        required: false  # Optional: for local overrides and secrets
+    environment:
+      DATABASE_URL: postgresql://taskuser:taskpass@postgres:5432/tasktracker_dev
+
+  frontend:
+    container_name: task-tracker-frontend-dev
+    ports:
+      - "3001:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:6002
+
+volumes:
+  postgres_data_dev:

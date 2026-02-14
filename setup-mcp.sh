@@ -2,6 +2,11 @@
 
 # Task Tracker MCP Setup Script
 # This script sets up the MCP configuration for the current repository
+#
+# Usage:
+#   ./setup-mcp.sh           # Setup for production (default)
+#   ./setup-mcp.sh prod      # Setup for production explicitly
+#   ./setup-mcp.sh dev       # Setup for development
 
 set -e  # Exit on error
 
@@ -12,16 +17,36 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Configuration
-API_URL="${TASK_TRACKER_API_URL:-http://localhost:6001}"
-MCP_CONFIG_FILE=".mcp.local.json"
-API_KEY_NAME="MCP Server Key - $(date +%Y%m%d-%H%M%S)"
+# Default to production
+ENV="${1:-prod}"
+
+# Determine environment configuration
+if [ "$ENV" = "dev" ] || [ "$ENV" = "development" ]; then
+    API_URL="${TASK_TRACKER_API_URL:-http://localhost:6002}"
+    MCP_CONFIG_FILE=".mcp.dev.json"
+    MCP_SERVER_NAME="task-tracker-dev"
+    ENV_LABEL="Development"
+    COMPOSE_CMD="docker compose -p tasktracker_dev -f docker-compose.yml -f docker-compose.dev.yml"
+elif [ "$ENV" = "prod" ] || [ "$ENV" = "production" ]; then
+    API_URL="${TASK_TRACKER_API_URL:-http://localhost:6001}"
+    MCP_CONFIG_FILE=".mcp.prod.json"
+    MCP_SERVER_NAME="task-tracker-prod"
+    ENV_LABEL="Production"
+    COMPOSE_CMD="docker compose -p tasktracker_prod -f docker-compose.yml -f docker-compose.prod.yml"
+else
+    echo -e "${RED}❌ Invalid environment: $ENV${NC}"
+    echo "Usage: ./setup-mcp.sh [prod|dev]"
+    exit 1
+fi
+
+API_KEY_NAME="MCP Server Key ($ENV_LABEL) - $(date +%Y%m%d-%H%M%S)"
 API_KEY_EXPIRY_DAYS=365
 
 # Helper functions
 print_header() {
     echo -e "\n${BLUE}========================================${NC}"
     echo -e "${BLUE}  Task Tracker MCP Setup${NC}"
+    echo -e "${BLUE}  Environment: $ENV_LABEL${NC}"
     echo -e "${BLUE}========================================${NC}\n"
 }
 
@@ -60,7 +85,13 @@ check_backend() {
 
     if ! curl -s -f "$API_URL/health" > /dev/null 2>&1; then
         print_error "Backend is not running at $API_URL"
-        echo "Please start the backend with: docker-compose up -d"
+        echo ""
+        echo "Please start the backend with:"
+        echo "  Production: make prod-start"
+        echo "  Development: make dev-start"
+        echo ""
+        echo "Or manually:"
+        echo "  $COMPOSE_CMD up -d"
         exit 1
     fi
 
@@ -141,13 +172,9 @@ create_mcp_config() {
     cat > "$MCP_CONFIG_FILE" << EOF
 {
   "mcpServers": {
-    "task-tracker": {
-      "command": "uvx",
-      "args": [
-        "--from",
-        "git+https://github.com/aman-kk/mcp_tasktracker",
-        "mcp-tasktracker"
-      ],
+    "$MCP_SERVER_NAME": {
+      "command": "python3",
+      "args": ["./mcp-server/stdio_server.py"],
       "env": {
         "TASK_TRACKER_API_URL": "$API_URL",
         "TASK_TRACKER_API_KEY": "$API_KEY",
@@ -164,11 +191,11 @@ EOF
 # Add to gitignore
 update_gitignore() {
     if [ -f ".gitignore" ]; then
-        if ! grep -q "^.mcp.local.json$" .gitignore; then
+        if ! grep -q "^$MCP_CONFIG_FILE$" .gitignore; then
             print_info "Adding $MCP_CONFIG_FILE to .gitignore..."
             echo "" >> .gitignore
-            echo "# MCP local configuration (contains secrets)" >> .gitignore
-            echo ".mcp.local.json" >> .gitignore
+            echo "# MCP $ENV_LABEL configuration (contains secrets)" >> .gitignore
+            echo "$MCP_CONFIG_FILE" >> .gitignore
             print_success "Updated .gitignore"
         fi
     fi
@@ -181,10 +208,12 @@ show_summary() {
     echo -e "${GREEN}========================================${NC}\n"
 
     echo "Configuration Details:"
+    echo "  • Environment: $ENV_LABEL"
     echo "  • User: $USER_NAME (ID: $USER_ID)"
     echo "  • API URL: $API_URL"
     echo "  • API Key: ${API_KEY:0:20}... (saved to $MCP_CONFIG_FILE)"
     echo "  • Expires: $API_KEY_EXPIRY_DAYS days"
+    echo "  • MCP Server Name: $MCP_SERVER_NAME"
 
     echo -e "\n${YELLOW}Next Steps:${NC}"
     echo "  1. Restart Claude Code for changes to take effect"
@@ -193,6 +222,11 @@ show_summary() {
 
     echo -e "\n${YELLOW}Note:${NC} The API key is stored in $MCP_CONFIG_FILE"
     echo "Do not commit this file to version control!"
+
+    echo -e "\n${YELLOW}Multi-Environment Setup:${NC}"
+    echo "You can set up both production and development MCP configs:"
+    echo "  ./setup-mcp.sh prod   # Creates .mcp.prod.json"
+    echo "  ./setup-mcp.sh dev    # Creates .mcp.dev.json"
 }
 
 # Main execution

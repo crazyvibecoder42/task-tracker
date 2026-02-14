@@ -20,19 +20,29 @@ The task tracker backend requires authentication for all API endpoints. Two auth
 **Note:** Fresh deployments from `init.sql` will seed this admin account with the default password. For production use, change this password immediately after first login.
 
 ### MCP Server Configuration
-The MCP server is configured via `.mcp.local.json` (gitignored) with the following environment variables:
-- `TASK_TRACKER_API_URL`: Backend URL (http://localhost:6001)
+
+The MCP server supports **separate configurations for production and development environments**:
+
+**Configuration Files:**
+- `.mcp.prod.json` - Production MCP config (gitignored, contains production API key)
+- `.mcp.dev.json` - Development MCP config (gitignored, contains development API key)
+- `.mcp.prod.json.template` - Production template (committed)
+- `.mcp.dev.json.template` - Development template (committed)
+
+**Environment Variables:**
+- `TASK_TRACKER_API_URL`: Backend URL (production: http://localhost:6001, development: http://localhost:6002)
 - `TASK_TRACKER_API_KEY`: API key for authentication (format: `ttk_live_<random>`)
 - `TASK_TRACKER_USER_ID`: User ID associated with the API key
 
 ### Creating New API Keys
-To create a new API key for the MCP server:
+
+**For Production Environment (port 6001):**
 
 1. Login to get an access token:
    ```bash
    curl -X POST http://localhost:6001/api/auth/login \
      -H "Content-Type: application/json" \
-     -d '{"email":"admin@example.com","password":"admin123"}'
+     -d '{"email":"admin@example.com","password":"your-prod-password"}'
    ```
 
 2. Use the access token to create an API key:
@@ -40,12 +50,39 @@ To create a new API key for the MCP server:
    curl -X POST http://localhost:6001/api/auth/api-keys \
      -H "Content-Type: application/json" \
      -H "Authorization: Bearer <access_token>" \
-     -d '{"name":"MCP Server Key","expires_days":365}'
+     -d '{"name":"MCP Production Key","expires_days":365}'
    ```
 
-3. Update `.mcp.local.json` with the new key and restart Claude Code.
+3. Update `.mcp.prod.json` with the new key and restart Claude Code.
 
-**Note:** After updating `.mcp.local.json`, you must restart Claude Code for changes to take effect.
+**For Development Environment (port 6002):**
+
+1. Login to get an access token:
+   ```bash
+   curl -X POST http://localhost:6002/api/auth/login \
+     -H "Content-Type: application/json" \
+     -d '{"email":"admin@example.com","password":"admin123"}'
+   ```
+
+2. Use the access token to create an API key:
+   ```bash
+   curl -X POST http://localhost:6002/api/auth/api-keys \
+     -H "Content-Type: application/json" \
+     -H "Authorization: Bearer <access_token>" \
+     -d '{"name":"MCP Development Key","expires_days":365}'
+   ```
+
+3. Update `.mcp.dev.json` with the new key and restart Claude Code.
+
+**Note:** After updating MCP configuration files, you must restart Claude Code for changes to take effect.
+
+**Using Both Environments Simultaneously:**
+
+You can configure Claude Code to connect to both production and development environments at the same time. When both are configured, MCP tools will have distinct prefixes:
+- Production tools: `mcp__task-tracker-prod__*`
+- Development tools: `mcp__task-tracker-dev__*`
+
+This allows you to work with both environments without conflicts.
 
 ## Task Workflow
 
@@ -380,41 +417,235 @@ For a new feature like "Add task dependencies":
 
 ## Development Workflow
 
+### Environment Overview
+
+The Task Tracker supports **separate production and development environments** that can run simultaneously:
+
+| Environment | Frontend | Backend | Database | DB Name | Volume |
+|-------------|----------|---------|----------|---------|--------|
+| **Production** | 3000 | 6001 | 5432 | tasktracker | postgres_data |
+| **Development** | 3001 | 6002 | 5433 | tasktracker_dev | postgres_data_dev |
+
 ### Running the Application
+
+**Quickest Start (Development):**
 ```bash
-# Start all services
-docker-compose up -d
+# Simplest command - automatically starts development environment
+docker compose up -d
 
-# Check backend health
-curl http://localhost:6001/health
-
-# Check frontend
-open http://localhost:3000
+# Access at: http://localhost:3001 (frontend), http://localhost:6002 (backend)
+# Stop with: docker compose down
 ```
+
+This uses `docker-compose.override.yml` which provides development defaults automatically. **No additional configuration needed!**
+
+**Make Commands (Recommended):**
+```bash
+# Production (ports 3000/6001/5432)
+make prod-start      # Start production
+make prod-stop       # Stop production
+make prod-logs       # View logs
+make prod-restart    # Restart services
+make prod-db         # Connect to database
+
+# Development (ports 3001/6002/5433)
+make dev-start       # Start development (explicit)
+make dev-stop        # Stop development
+make dev-logs        # View logs
+make dev-restart     # Restart services
+make dev-reset       # Reset database (fresh start)
+make dev-db          # Connect to database
+
+# Both Environments
+make start-all       # Start both production and development
+make stop-all        # Stop both environments
+make status          # Show status of all environments
+```
+
+**Manual Docker Compose (Advanced):**
+
+Three ways to run:
+
+1. **Default Development** (uses `docker-compose.override.yml` automatically):
+   ```bash
+   docker compose up -d
+   docker compose down
+   ```
+
+2. **Explicit Development**:
+   ```bash
+   docker compose -p tasktracker_dev -f docker-compose.yml -f docker-compose.dev.yml up -d
+   docker compose -p tasktracker_dev -f docker-compose.yml -f docker-compose.dev.yml down
+   ```
+
+3. **Production** (requires explicit flags):
+   ```bash
+   docker compose -p tasktracker_prod -f docker-compose.yml -f docker-compose.prod.yml up -d
+   docker compose -p tasktracker_prod -f docker-compose.yml -f docker-compose.prod.yml down
+   ```
+
+**IMPORTANT:**
+- Bare `docker compose up` automatically loads `docker-compose.override.yml` (development defaults)
+- The `-p` (project name) flag is **required** for explicit environments to run both simultaneously
+- Without `-p`, both environments would share the same Docker Compose project and conflict
+
+### Environment Configuration Files
+
+```
+├── docker-compose.yml              # Base configuration (shared)
+├── docker-compose.override.yml     # Auto-loaded development defaults
+├── docker-compose.prod.yml         # Production overrides (explicit)
+├── docker-compose.dev.yml          # Development overrides (explicit)
+├── .env.production                 # Production config (no secrets)
+├── .env.development               # Development config (safe defaults)
+├── .env.local                     # Local secrets (gitignored)
+├── .mcp.prod.json                 # Production MCP (gitignored)
+├── .mcp.dev.json                  # Development MCP (gitignored)
+├── .mcp.prod.json.template        # Production MCP template
+└── .mcp.dev.json.template         # Development MCP template
+```
+
+**File Hierarchy:**
+- `docker-compose.yml` - Base services (no ports, no environment-specific config)
+- `docker-compose.override.yml` - **Auto-loaded** for `docker compose up` (development defaults)
+- `docker-compose.{prod,dev}.yml` - Explicit environment overrides (require `-f` flag)
+
+**Production Setup:**
+- Edit `.env.local` (gitignored) with secrets:
+  ```bash
+  ADMIN_PASSWORD=your-strong-password
+  JWT_SECRET_KEY=$(python -c 'import secrets; print(secrets.token_urlsafe(32))')
+  ```
+- Create `.mcp.prod.json` from template with production API key
+
+**Development Setup:**
+- Uses `.env.development` with safe defaults (admin123, dev JWT key)
+- Create `.mcp.dev.json` from template with development API key
+- No additional configuration needed
 
 ### Database Access
-```bash
-# Connect to PostgreSQL
-docker-compose exec postgres psql -U taskuser -d tasktracker
 
-# View tasks
+**Production Database:**
+```bash
+# Using Make
+make prod-db
+
+# Or manually
+docker compose -p tasktracker_prod -f docker-compose.yml -f docker-compose.prod.yml exec postgres psql -U taskuser -d tasktracker
+
+# Or from host
+psql postgresql://taskuser:taskpass@localhost:5432/tasktracker
+```
+
+**Development Database:**
+```bash
+# Using Make
+make dev-db
+
+# Or manually
+docker compose -p tasktracker_dev -f docker-compose.yml -f docker-compose.dev.yml exec postgres psql -U taskuser -d tasktracker_dev
+
+# Or from host
+psql postgresql://taskuser:taskpass@localhost:5433/tasktracker_dev
+```
+
+**Common Queries:**
+```sql
+-- View tasks
 SELECT id, title, status, parent_task_id, project_id FROM tasks;
 
-# View dependencies
+-- View dependencies
 SELECT blocking_task_id, blocked_task_id FROM task_dependencies;
+
+-- View database size
+SELECT pg_database_size(current_database());
 ```
 
-**Fresh Database Setup:** Docker Compose automatically initializes the database using `backend/init.sql` on first run. To reset the database, use `docker-compose down -v` to remove volumes, then `docker-compose up -d` to recreate with fresh schema.
+**Fresh Database Setup:**
+- Docker Compose automatically initializes the database using `backend/init.sql` on first run
+- To reset production: `make prod-reset` (⚠️ WARNING: destroys all data)
+- To reset development: `make dev-reset` (safe, designed for frequent resets)
 
 ### Testing
+
+**Production Environment:**
 ```bash
-# Restart backend after code changes
-docker-compose restart backend
+# Restart after code changes
+make prod-restart
 
 # Test endpoints
+curl http://localhost:6001/health
 curl http://localhost:6001/api/tasks
 curl http://localhost:6001/api/tasks/actionable
+
+# View logs
+make prod-logs
 ```
+
+**Development Environment:**
+```bash
+# Restart after code changes
+make dev-restart
+
+# Test endpoints
+curl http://localhost:6002/health
+curl http://localhost:6002/api/tasks
+curl http://localhost:6002/api/tasks/actionable
+
+# View logs
+make dev-logs
+
+# Reset database for clean state
+make dev-reset
+```
+
+### Multi-Environment Benefits
+
+1. **Complete Isolation** - Dev and prod never interfere with each other
+2. **Data Safety** - Development experiments never affect production data
+3. **Parallel Operation** - Both environments can run simultaneously
+4. **Easy Reset** - `make dev-reset` wipes development without touching production
+5. **Independent APIs** - Separate API keys and authentication for each environment
+6. **Database Isolation** - Separate databases prevent data corruption
+7. **Port Separation** - No conflicts when running both environments
+
+### MCP Configuration Per Environment
+
+**Production MCP (`.mcp.prod.json`):**
+```json
+{
+  "mcpServers": {
+    "task-tracker-prod": {
+      "command": "python3",
+      "args": ["./mcp-server/stdio_server.py"],
+      "env": {
+        "TASK_TRACKER_API_URL": "http://localhost:6001",
+        "TASK_TRACKER_API_KEY": "ttk_live_production_key",
+        "TASK_TRACKER_USER_ID": "1"
+      }
+    }
+  }
+}
+```
+
+**Development MCP (`.mcp.dev.json`):**
+```json
+{
+  "mcpServers": {
+    "task-tracker-dev": {
+      "command": "python3",
+      "args": ["./mcp-server/stdio_server.py"],
+      "env": {
+        "TASK_TRACKER_API_URL": "http://localhost:6002",
+        "TASK_TRACKER_API_KEY": "ttk_live_development_key",
+        "TASK_TRACKER_USER_ID": "1"
+      }
+    }
+  }
+}
+```
+
+**Note:** After updating MCP configuration, restart Claude Code for changes to take effect.
 
 ## Documentation Policy
 

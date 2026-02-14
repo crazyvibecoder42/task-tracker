@@ -1,14 +1,49 @@
-# Local Development Overrides
-# This file is used by Docker Compose automatically for local development
-# It should be committed to the repository for developer convenience
+# Docker Compose Override - Development Environment
 #
-# Production deployments should NOT use this file - deploy docker-compose.yml
-# directly with proper environment variable injection
-
-version: '3.8'
+# This file is automatically loaded when you run: docker compose up
+# It provides development defaults for local development convenience.
+#
+# IMPORTANT: This file configures the DEVELOPMENT environment.
+# - Uses ports: 3001 (frontend), 6002 (backend), 5433 (database)
+# - Uses database: tasktracker_dev
+# - Safe development credentials
+#
+# For production, use explicit commands:
+#   make prod-start
+#   OR: docker compose -p tasktracker_prod -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# This file is committed to the repository to ensure developers can run
+# `docker compose up` without additional configuration.
 
 services:
+  postgres:
+    container_name: task-tracker-db-dev-default
+    environment:
+      POSTGRES_USER: taskuser
+      POSTGRES_PASSWORD: taskpass
+      POSTGRES_DB: tasktracker_dev
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data_dev_default:/var/lib/postgresql/data
+
   backend:
+    container_name: task-tracker-backend-dev-default
+    ports:
+      - "6002:6001"
     env_file:
-      - ./backend/.env.development  # Development defaults (ENVIRONMENT=development)
-      # Optional: create ./backend/.env for local overrides (gitignored)
+      - .env.development
+      - path: .env.local
+        required: false
+    environment:
+      DATABASE_URL: postgresql://taskuser:taskpass@postgres:5432/tasktracker_dev
+
+  frontend:
+    container_name: task-tracker-frontend-dev-default
+    ports:
+      - "3001:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:6002
+
+volumes:
+  postgres_data_dev_default:
