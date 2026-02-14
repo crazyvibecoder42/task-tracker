@@ -115,9 +115,70 @@ make stop-all     # Stop both environments
 └── .mcp.dev.json.template         # Development MCP template
 ```
 
+## REST API Usage (Direct curl)
+
+**Note:** Most users will interact through MCP tools, not direct API calls. This section is for reference or custom integrations.
+
+### Admin Setup via REST API
+
+**Step 1: Login as Admin**
+```bash
+curl -X POST http://localhost:6002/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@example.com","password":"admin123"}'
+```
+
+**Step 2: Create a Team**
+```bash
+curl -X POST http://localhost:6002/api/teams \
+  -H "Authorization: Bearer <admin_token>" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"AI Research Team","description":"Collaborative AI agents"}'
+```
+
+**Step 3: Create a Project**
+```bash
+curl -X POST http://localhost:6002/api/projects \
+  -H "Authorization: Bearer <admin_token>" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Research Project","team_id":1}'
+```
+
+**Step 4: Create Users for Each Agent**
+```bash
+curl -X POST http://localhost:6002/api/users \
+  -H "Authorization: Bearer <admin_token>" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Research Agent","email":"agent1@example.com","password":"agent123","role":"editor"}'
+```
+
+**Step 5: Add User to Team**
+```bash
+curl -X POST http://localhost:6002/api/teams/1/members \
+  -H "Authorization: Bearer <admin_token>" \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":2,"role":"member"}'
+```
+
+### Agent MCP Configuration via REST API
+
+**Generate MCP Config for an Agent:**
+```bash
+# Login as the agent
+curl -X POST http://localhost:6002/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"agent1@example.com","password":"agent123"}'
+
+# Generate MCP configuration (creates API key and returns config)
+curl -X POST http://localhost:6002/api/auth/generate-mcp-config \
+  -H "Authorization: Bearer <agent_token>" \
+  -H "Content-Type: application/json" \
+  -d '{"key_name":"Agent 1 MCP Access","api_url":"http://localhost:6002"}'
+```
+
 ## MCP Server Setup
 
-### Manual MCP Configuration
+### MCP Configuration (Recommended Method)
 
 **IMPORTANT:** MCP servers require absolute paths for both the Python interpreter and the server script.
 

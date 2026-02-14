@@ -32,106 +32,88 @@ Traditional task trackers are built for humans clicking buttons. This is built f
 # Start development environment
 docker compose up -d
 
-# Backend will be available at: http://localhost:6002
-# Frontend will be available at: http://localhost:3001
-# Default admin login: admin@example.com / admin123
+# Backend: http://localhost:6002
+# Frontend: http://localhost:3001
+# Default admin: admin@example.com / admin123
 ```
 
-### 2. Admin Flow (Setting Up Agents)
-
-**Step 1: Login as Admin**
-```bash
-curl -X POST http://localhost:6002/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email":"admin@example.com","password":"admin123"}'
-```
-
-**Step 2: Create a Team (Optional)**
-```bash
-curl -X POST http://localhost:6002/api/teams \
-  -H "Authorization: Bearer <admin_token>" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"AI Research Team","description":"Collaborative AI agents"}'
-```
-
-**Step 3: Create a Project**
-```bash
-curl -X POST http://localhost:6002/api/projects \
-  -H "Authorization: Bearer <admin_token>" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"Research Project","team_id":1}'
-```
-
-**Step 4: Create Users for Each Agent**
-```bash
-# Create agent user
-curl -X POST http://localhost:6002/api/users \
-  -H "Authorization: Bearer <admin_token>" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"Research Agent","email":"agent1@example.com","password":"agent123","role":"editor"}'
-```
-
-**Step 5: Add User to Team**
-```bash
-curl -X POST http://localhost:6002/api/teams/1/members \
-  -H "Authorization: Bearer <admin_token>" \
-  -H "Content-Type: application/json" \
-  -d '{"user_id":2,"role":"member"}'
-```
-
-### 3. Agent Flow (Getting MCP Access)
-
-**As the agent user, generate your MCP config:**
+### 2. Install MCP Server
 
 ```bash
-# Login as the agent
-curl -X POST http://localhost:6002/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email":"agent1@example.com","password":"agent123"}'
-
-# Generate MCP configuration (this creates API key and returns config)
-curl -X POST http://localhost:6002/api/auth/generate-mcp-config \
-  -H "Authorization: Bearer <agent_token>" \
-  -H "Content-Type: application/json" \
-  -d '{"key_name":"Agent 1 MCP Access","api_url":"http://localhost:6002"}'
-```
-
-**Save the returned JSON to `.mcp.json` in your MCP client:**
-
-The response will include a complete MCP server configuration:
-```json
-{
-  "mcpServers": {
-    "task-tracker": {
-      "command": "/path/to/python3",
-      "args": ["/path/to/.mcp-servers/stdio_server.py"],
-      "env": {
-        "TASK_TRACKER_API_URL": "http://localhost:6002",
-        "TASK_TRACKER_API_KEY": "ttk_live_...",
-        "TASK_TRACKER_USER_ID": "2"
-      }
-    }
-  }
-}
-```
-
-**Put this in your `.mcp.json` file** (usually in `~/.claude/` for Claude Desktop or in your project root for Claude Code).
-
-**Important:** Update the `command` and `args` paths to match your system:
-```bash
-# Find your Python path
-which python3
-
-# Install MCP server
+# Install MCP server to standard location
 mkdir -p ~/.mcp-servers
 cp -r mcp-server/* ~/.mcp-servers/
+
+# Find your Python path (you'll need this later)
+which python3
+# Example: /opt/homebrew/bin/python3
 ```
 
-Then update the config paths to use absolute paths:
-- `command`: Your Python path from `which python3`
-- `args`: `["/Users/yourname/.mcp-servers/stdio_server.py"]`
+### 3. Admin Setup (Using MCP Tools)
 
-Restart your MCP client (Claude Desktop/Code), and the agent will now have full access to the task tracker with its own identity!
+**First-time setup requires admin to bootstrap the system:**
+
+1. **Get Admin's MCP Config**
+   - Use the MCP tool: `generate_mcp_config(key_name="Admin MCP Access")`
+   - This creates an API key and returns ready-to-use MCP configuration
+   - Save the returned JSON to `.mcp.json` in your repo or `~/.claude/`
+   - Update `command` and `args` paths to absolute paths (see returned config)
+   - Restart your MCP client (Claude Desktop/Code)
+
+2. **Create Teams** (optional but recommended)
+   - Use: `create_team(name="AI Research Team", description="...")`
+   - Teams organize projects and control task assignment
+
+3. **Create Projects**
+   - Use: `create_project(name="Research Project", team_id=1)`
+   - Projects contain tasks and can be team-owned or personal
+
+4. **Create Users for Each Agent**
+   - Use: `create_user(name="Research Agent", email="agent1@example.com", password="agent123", role="editor")`
+   - Each agent needs its own user account for identity tracking
+   - Roles: `admin` (full access), `editor` (manage tasks), `viewer` (read-only)
+
+5. **Add Users to Teams**
+   - Use: `add_team_member(team_id=1, user_id=2, role="member")`
+   - Team membership controls who can be assigned tasks in team projects
+
+### 4. Agent Setup (Each Agent Does This)
+
+**Once admin creates your user account, get your own MCP access:**
+
+1. **Generate Your MCP Config**
+   - Login with your credentials first (through web UI or have admin generate config for you)
+   - Admin can run: `generate_mcp_config(key_name="Agent 1 Access", user_id=2)`
+   - You'll receive a complete MCP configuration:
+
+   ```json
+   {
+     "mcpServers": {
+       "task-tracker": {
+         "command": "/opt/homebrew/bin/python3",
+         "args": ["/Users/yourname/.mcp-servers/stdio_server.py"],
+         "env": {
+           "TASK_TRACKER_API_URL": "http://localhost:6002",
+           "TASK_TRACKER_API_KEY": "ttk_live_abc123...",
+           "TASK_TRACKER_USER_ID": "2"
+         }
+       }
+     }
+   }
+   ```
+
+2. **Save Config to `.mcp.json`**
+   - Put the config in your project's `.mcp.json` file (this repo)
+   - Or in `~/.claude/` for Claude Desktop
+   - **Important:** Use absolute paths for `command` and `args`
+
+3. **Restart Your MCP Client**
+   - Restart Claude Desktop or Claude Code
+   - You now have full task tracker access with your own identity!
+
+4. **Verify It Works**
+   - Try: `get_current_user()` - should show your user info
+   - Try: `list_projects()` - should show projects you have access to
 
 ## MCP Tools Overview
 
