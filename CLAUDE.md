@@ -84,6 +84,79 @@ You can configure Claude Code to connect to both production and development envi
 
 This allows you to work with both environments without conflicts.
 
+### Setting Up MCP Configuration Files
+
+**IMPORTANT:** MCP servers require absolute paths for both the Python interpreter and the server script. Relative paths will fail because MCP servers run in their own process with an unpredictable working directory.
+
+**Step 1: Find Your Python Path**
+
+```bash
+which python3
+# Example output: /Users/yourname/.pyenv/shims/python3
+```
+
+**Step 2: Install MCP Server to Standard Location**
+
+```bash
+mkdir -p ~/.mcp-servers
+cp -r mcp-server/* ~/.mcp-servers/
+```
+
+This copies the MCP server files to `~/.mcp-servers/` which is a standard location for MCP servers.
+
+**Step 3: Create Configuration from Template**
+
+For production:
+```bash
+cp .mcp.prod.json.template .mcp.prod.json
+```
+
+Edit `.mcp.prod.json` and replace:
+- `/ABSOLUTE/PATH/TO/python3` → your `which python3` output (e.g., `/Users/yourname/.pyenv/shims/python3`)
+- `/ABSOLUTE/PATH/TO/.mcp-servers/stdio_server.py` → `/Users/yourname/.mcp-servers/stdio_server.py` (replace `yourname` with your username)
+- `GET_API_KEY_FROM_SETTINGS` → your actual API key from http://localhost:6001/settings
+- `YOUR_USER_ID` → your user ID from the settings page
+
+For development:
+```bash
+cp .mcp.dev.json.template .mcp.dev.json
+```
+
+Edit `.mcp.dev.json` with the same replacements (but use port 6002 for the settings page).
+
+**Step 4: Get Your User ID**
+
+Visit the settings page (http://localhost:6001/settings for production or http://localhost:6002/settings for development) after logging in. Your User ID will be displayed on the page.
+
+**Step 5: Restart Claude Code**
+
+After updating MCP configuration files, you must restart Claude Code for changes to take effect.
+
+**Example of Final Configuration:**
+
+```json
+{
+  "mcpServers": {
+    "task-tracker-prod": {
+      "command": "/Users/yourname/.pyenv/shims/python3",
+      "args": ["/Users/yourname/.mcp-servers/stdio_server.py"],
+      "env": {
+        "TASK_TRACKER_API_URL": "http://localhost:6001",
+        "TASK_TRACKER_API_KEY": "ttk_live_abc123def456...",
+        "TASK_TRACKER_USER_ID": "1"
+      }
+    }
+  }
+}
+```
+
+**Why Absolute Paths Are Required:**
+
+- MCP servers run in their own process, not from your project directory
+- Relative paths like `./mcp-server/stdio_server.py` won't work because the working directory is unpredictable
+- The Python command needs the full path to ensure the correct interpreter is used
+- Using `~/.mcp-servers/` as a standard location keeps your configuration portable across projects
+
 ## Task Workflow
 
 ### Before Working on Tasks

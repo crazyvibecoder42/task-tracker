@@ -1,12 +1,36 @@
 {
+  "_comment_setup_1": "═══════════════════════════════════════════════════════════════════════════",
+  "_comment_setup_2": "                  DEVELOPMENT MCP SERVER SETUP INSTRUCTIONS                 ",
+  "_comment_setup_3": "═══════════════════════════════════════════════════════════════════════════",
+  "_comment_step_1": "STEP 1: Find your Python path",
+  "_comment_step_1a": "  Run: which python3",
+  "_comment_step_1b": "  Example output: /Users/yourname/.pyenv/shims/python3",
+  "_comment_step_2": "STEP 2: Install MCP server to standard location",
+  "_comment_step_2a": "  Run: mkdir -p ~/.mcp-servers",
+  "_comment_step_2b": "  Run: cp -r mcp-server/* ~/.mcp-servers/",
+  "_comment_step_3": "STEP 3: Create development config from this template",
+  "_comment_step_3a": "  Run: cp .mcp.dev.json.template .mcp.dev.json",
+  "_comment_step_4": "STEP 4: Get API key from development environment",
+  "_comment_step_4a": "  Visit: http://localhost:6002/settings",
+  "_comment_step_4b": "  Click 'Create New API Key' and copy the key",
+  "_comment_step_4c": "  Note your User ID shown on the settings page",
+  "_comment_step_5": "STEP 5: Edit .mcp.dev.json and replace placeholders below:",
+  "_comment_step_5a": "  - /ABSOLUTE/PATH/TO/python3 → your 'which python3' output",
+  "_comment_step_5b": "  - /ABSOLUTE/PATH/TO/.mcp-servers/stdio_server.py → /Users/YOURNAME/.mcp-servers/stdio_server.py",
+  "_comment_step_5c": "  - GET_API_KEY_FROM_SETTINGS → your actual API key from settings page",
+  "_comment_step_5d": "  - YOUR_USER_ID → your user ID from settings page",
+  "_comment_step_6": "STEP 6: Restart Claude Code for changes to take effect",
+  "_comment_note": "NOTE: Do NOT commit .mcp.dev.json (it's gitignored). It contains your API key.",
+  "_comment_separator": "───────────────────────────────────────────────────────────────────────────",
+
   "mcpServers": {
     "task-tracker-dev": {
-      "command": "python3",
-      "args": ["./mcp-server/stdio_server.py"],
+      "command": "/ABSOLUTE/PATH/TO/python3",
+      "args": ["/ABSOLUTE/PATH/TO/.mcp-servers/stdio_server.py"],
       "env": {
         "TASK_TRACKER_API_URL": "http://localhost:6002",
-        "TASK_TRACKER_API_KEY": "ttk_live_DEVELOPMENT_KEY_HERE",
-        "TASK_TRACKER_USER_ID": "1"
+        "TASK_TRACKER_API_KEY": "GET_API_KEY_FROM_SETTINGS",
+        "TASK_TRACKER_USER_ID": "YOUR_USER_ID"
       }
     }
   }

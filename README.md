@@ -242,123 +242,104 @@ Each environment has its own isolated database:
 
 The MCP server allows programmatic access to the task tracker through Claude Desktop or other MCP clients. You can configure separate MCP connections for production and development environments.
 
-### Installation
+### Installation and Configuration
 
-1. Install dependencies:
-   ```bash
-   cd mcp-server
-   pip install -r requirements.txt
-   ```
+**IMPORTANT:** MCP servers require absolute paths for both the Python interpreter and the server script. Relative paths will fail because MCP servers run in their own process with an unpredictable working directory.
 
-2. **Generate API Keys** for each environment:
+**Step 1: Find Your Python Path**
 
-   **For Production (port 6001):**
-   ```bash
-   # Login to get access token
-   curl -X POST http://localhost:6001/api/auth/login \
-     -H "Content-Type: application/json" \
-     -d '{"email":"admin@example.com","password":"your-password"}'
+```bash
+which python3
+# Example output: /Users/yourname/.pyenv/shims/python3
+```
 
-   # Create API key
-   curl -X POST http://localhost:6001/api/auth/api-keys \
-     -H "Content-Type: application/json" \
-     -H "Authorization: Bearer <access_token>" \
-     -d '{"name":"MCP Production Key","expires_days":365}'
-   ```
+**Step 2: Install MCP Server to Standard Location**
 
-   **For Development (port 6002):**
-   ```bash
-   # Login to get access token
-   curl -X POST http://localhost:6002/api/auth/login \
-     -H "Content-Type: application/json" \
-     -d '{"email":"admin@example.com","password":"admin123"}'
+```bash
+mkdir -p ~/.mcp-servers
+cp -r mcp-server/* ~/.mcp-servers/
+```
 
-   # Create API key
-   curl -X POST http://localhost:6002/api/auth/api-keys \
-     -H "Content-Type: application/json" \
-     -H "Authorization: Bearer <access_token>" \
-     -d '{"name":"MCP Development Key","expires_days":365}'
-   ```
+This copies the MCP server files to `~/.mcp-servers/` which is a standard location for MCP servers.
 
-3. **Configure MCP for Production:**
+**Step 3: Generate API Keys**
 
-   Copy the template and add your API key:
-   ```bash
-   cp .mcp.prod.json.template .mcp.prod.json
-   # Edit .mcp.prod.json and replace PRODUCTION_KEY_HERE with your key
-   ```
+**For Production Environment (port 6001):**
+```bash
+# Login to get access token
+curl -X POST http://localhost:6001/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@example.com","password":"your-password"}'
 
-   Result (`.mcp.prod.json`):
-   ```json
-   {
-     "mcpServers": {
-       "task-tracker-prod": {
-         "command": "python3",
-         "args": ["./mcp-server/stdio_server.py"],
-         "env": {
-           "TASK_TRACKER_API_URL": "http://localhost:6001",
-           "TASK_TRACKER_API_KEY": "ttk_live_abc123...",
-           "TASK_TRACKER_USER_ID": "1"
-         }
-       }
-     }
-   }
-   ```
+# Create API key (use the access_token from login response)
+curl -X POST http://localhost:6001/api/auth/api-keys \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <access_token>" \
+  -d '{"name":"MCP Production Key","expires_days":365}'
+```
 
-4. **Configure MCP for Development:**
+**For Development Environment (port 6002):**
+```bash
+# Login to get access token
+curl -X POST http://localhost:6002/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@example.com","password":"admin123"}'
 
-   Copy the template and add your API key:
-   ```bash
-   cp .mcp.dev.json.template .mcp.dev.json
-   # Edit .mcp.dev.json and replace DEVELOPMENT_KEY_HERE with your key
-   ```
+# Create API key (use the access_token from login response)
+curl -X POST http://localhost:6002/api/auth/api-keys \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <access_token>" \
+  -d '{"name":"MCP Development Key","expires_days":365}'
+```
 
-   Result (`.mcp.dev.json`):
-   ```json
-   {
-     "mcpServers": {
-       "task-tracker-dev": {
-         "command": "python3",
-         "args": ["./mcp-server/stdio_server.py"],
-         "env": {
-           "TASK_TRACKER_API_URL": "http://localhost:6002",
-           "TASK_TRACKER_API_KEY": "ttk_live_xyz789...",
-           "TASK_TRACKER_USER_ID": "1"
-         }
-       }
-     }
-   }
-   ```
+**Step 4: Create Configuration Files from Templates**
 
-5. **Configure Claude Code to use both environments:**
+**For Production:**
+```bash
+cp .mcp.prod.json.template .mcp.prod.json
+```
 
-   In your Claude Code MCP configuration, you can include both servers:
-   ```json
-   {
-     "mcpServers": {
-       "task-tracker-prod": {
-         "command": "python3",
-         "args": ["/absolute/path/to/task-tracker/mcp-server/stdio_server.py"],
-         "env": {
-           "TASK_TRACKER_API_URL": "http://localhost:6001",
-           "TASK_TRACKER_API_KEY": "ttk_live_prod_key",
-           "TASK_TRACKER_USER_ID": "1"
-         }
-       },
-       "task-tracker-dev": {
-         "command": "python3",
-         "args": ["/absolute/path/to/task-tracker/mcp-server/stdio_server.py"],
-         "env": {
-           "TASK_TRACKER_API_URL": "http://localhost:6002",
-           "TASK_TRACKER_API_KEY": "ttk_live_dev_key",
-           "TASK_TRACKER_USER_ID": "1"
-         }
-       }
-     }
-   }
-   ```
+Edit `.mcp.prod.json` and replace:
+- `/ABSOLUTE/PATH/TO/python3` → your `which python3` output (e.g., `/Users/yourname/.pyenv/shims/python3`)
+- `/ABSOLUTE/PATH/TO/.mcp-servers/stdio_server.py` → `/Users/yourname/.mcp-servers/stdio_server.py` (replace `yourname`)
+- `GET_API_KEY_FROM_SETTINGS` → your actual API key from http://localhost:6001/settings
+- `YOUR_USER_ID` → your user ID from the settings page
 
-   **Note:** After updating MCP configuration, restart Claude Code for changes to take effect.
+**For Development:**
+```bash
+cp .mcp.dev.json.template .mcp.dev.json
+```
+
+Edit `.mcp.dev.json` with the same replacements (but use port 6002 for the settings page).
+
+**Step 5: Example of Final Configuration**
+
+After replacing placeholders, your `.mcp.prod.json` should look like:
+```json
+{
+  "mcpServers": {
+    "task-tracker-prod": {
+      "command": "/Users/yourname/.pyenv/shims/python3",
+      "args": ["/Users/yourname/.mcp-servers/stdio_server.py"],
+      "env": {
+        "TASK_TRACKER_API_URL": "http://localhost:6001",
+        "TASK_TRACKER_API_KEY": "ttk_live_abc123def456...",
+        "TASK_TRACKER_USER_ID": "1"
+      }
+    }
+  }
+}
+```
+
+**Step 6: Restart Claude Code**
+
+After updating MCP configuration files, you must restart Claude Code for changes to take effect.
+
+**Why Absolute Paths Are Required:**
+- MCP servers run in their own process, not from your project directory
+- Relative paths like `./mcp-server/stdio_server.py` won't work because the working directory is unpredictable
+- The Python command needs the full path to ensure the correct interpreter is used
+- Using `~/.mcp-servers/` as a standard location keeps your configuration portable across projects
 
 ### MCP Environment Switching
 
