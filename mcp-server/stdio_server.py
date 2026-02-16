@@ -7,8 +7,11 @@ For HTTP/SSE access on port 6000, use server.py instead.
 """
 
 import os
+import sys
 import json
 import asyncio
+import subprocess
+from pathlib import Path
 from typing import Any, Optional
 import httpx
 from mcp.server import Server
@@ -42,6 +45,52 @@ def validate_api_key():
         print("ERROR: Invalid TASK_TRACKER_API_KEY format. Must start with 'ttk_'", file=sys.stderr)
         print("Run: ./setup-mcp-quick.sh to generate a valid API key", file=sys.stderr)
         sys.exit(1)
+
+
+def get_real_python_path() -> str:
+    """
+    Get the real Python interpreter path, handling pyenv shims correctly.
+
+    Pyenv shims don't work in MCP subprocess contexts. This function resolves
+    the actual Python binary path that pyenv shims point to.
+
+    Returns:
+        str: Absolute path to the real Python interpreter
+    """
+    # First, try to get the current Python executable
+    current_python = sys.executable
+
+    # Check if we're using pyenv by looking for 'pyenv' in the path
+    if 'pyenv' in current_python and 'shims' in current_python:
+        # This is a pyenv shim - we need to resolve to the actual binary
+        try:
+            # Use pyenv which to get the real Python path
+            result = subprocess.run(
+                ['pyenv', 'which', 'python3'],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            real_python = result.stdout.strip()
+            if real_python and Path(real_python).exists():
+                return real_python
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            # pyenv command failed or not found, fall back to current executable
+            pass
+
+    # Return the current Python executable (works for non-pyenv and already resolved paths)
+    return current_python
+
+
+def get_mcp_server_path() -> str:
+    """
+    Get the absolute path to this MCP server script.
+
+    Returns:
+        str: Absolute path to stdio_server.py
+    """
+    return str(Path(__file__).resolve())
+
 
 # Initialize MCP server
 server = Server("task-tracker")
@@ -679,12 +728,16 @@ Example: list_actionable_tasks(project_id=4, priority='P0', limit=10)"""
                                         "detail": "No key returned from API"
                                     }
                                 else:
+                                    # Get real Python path (handles pyenv shims)
+                                    python_path = get_real_python_path()
+                                    server_path = get_mcp_server_path()
+
                                     # Generate .mcp.json configuration
                                     mcp_config = {
                                         "mcpServers": {
                                             "task-tracker": {
-                                                "command": "python3",
-                                                "args": ["./mcp-server/stdio_server.py"],
+                                                "command": python_path,
+                                                "args": [server_path],
                                                 "env": {
                                                     "TASK_TRACKER_API_URL": api_url,
                                                     "TASK_TRACKER_API_KEY": raw_key,
@@ -702,14 +755,22 @@ Example: list_actionable_tasks(project_id=4, priority='P0', limit=10)"""
                                     else:
                                         user_note = "\n✓ Configuration generated for current user"
 
+                                    # Add helpful notes about the paths
+                                    python_note = ""
+                                    if 'pyenv' in python_path:
+                                        python_note = "\n✓ Using real Python binary (pyenv shim resolved automatically)"
+
                                     instructions = f"""
 MCP Configuration Generated Successfully!
-{user_note}
+{user_note}{python_note}
 
 API Key Details:
 - Name: {key_name}
 - Key ID: {key_response['id']}
 - Expires: {key_response.get('expires_at', 'Never')}
+
+Python Path: {python_path}
+Server Path: {server_path}
 
 === COPY THIS CONFIGURATION ===
 
@@ -717,19 +778,20 @@ API Key Details:
 
 === SETUP INSTRUCTIONS ===
 
-1. Save the configuration above as .mcp.json in one of these locations:
-   • Project root: ~/your-project/.mcp.json
-   • User config: ~/.claude/.mcp.json
+1. Save the configuration above to your Claude Desktop config:
+   • macOS: ~/Library/Application Support/Claude/claude_desktop_config.json
+   • Linux: ~/.config/Claude/claude_desktop_config.json
+   • Windows: %APPDATA%/Claude/claude_desktop_config.json
 
-2. Install MCP server dependencies:
-   cd mcp-server
-   pip install -r requirements.txt
+   Note: The configuration uses ABSOLUTE PATHS for both Python and the MCP server.
+   This ensures it works reliably across different working directories.
 
-3. Restart Claude Code to load the new configuration
+2. Restart Claude Code (complete quit, not just close window)
 
-4. Verify connection by calling any MCP tool (e.g., list_projects)
+3. Verify connection by using any MCP tool (e.g., mcp__task-tracker__list_projects)
 
 ⚠️  SECURITY: Save this configuration securely. The API key cannot be retrieved later.
+⚠️  IMPORTANT: If you move this project or the Python installation, regenerate the config.
 """
 
                                     result = {"config": instructions}
