@@ -1,13 +1,31 @@
 {
+  "_comment_setup": "MCP Configuration Options",
+  "_comment_option_1": "Option 1: Use absolute paths (recommended for reliability)",
+  "_comment_option_2": "Option 2: Use environment variables PYTHON_PATH and MCP_SERVER_PATH",
+  "_comment_note": "Copy this file to .mcp.local.json and set your API key",
+
   "mcpServers": {
     "task-tracker": {
-      "type": "stdio",
-      "command": "python3",
-      "args": ["./mcp-server/stdio_server.py"],
+      "command": "/ABSOLUTE/PATH/TO/python3",
+      "args": ["/ABSOLUTE/PATH/TO/.mcp-servers/stdio_server.py"],
       "env": {
         "TASK_TRACKER_API_URL": "http://localhost:6001",
-        "TASK_TRACKER_API_KEY": null,
-        "_comment": "Copy this file to .mcp.local.json and set your API key. Run: ./setup-mcp-quick.sh"
+        "TASK_TRACKER_API_KEY": "GET_API_KEY_FROM_SETTINGS",
+        "TASK_TRACKER_USER_ID": "YOUR_USER_ID"
+      }
+    }
+  },
+
+  "_alternative_using_env_vars": {
+    "task-tracker": {
+      "command": "python3",
+      "args": ["stdio_server.py"],
+      "env": {
+        "PYTHON_PATH": "/Users/YOURNAME/.pyenv/versions/3.11.13/bin/python3",
+        "MCP_SERVER_PATH": "/Users/YOURNAME/.mcp-servers/stdio_server.py",
+        "TASK_TRACKER_API_URL": "http://localhost:6001",
+        "TASK_TRACKER_API_KEY": "GET_API_KEY_FROM_SETTINGS",
+        "TASK_TRACKER_USER_ID": "YOUR_USER_ID"
       }
     }
   }

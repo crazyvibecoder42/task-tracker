@@ -51,13 +51,24 @@ def get_real_python_path() -> str:
     """
     Get the real Python interpreter path, handling pyenv shims correctly.
 
+    Checks PYTHON_PATH environment variable first, then auto-detects.
     Pyenv shims don't work in MCP subprocess contexts. This function resolves
     the actual Python binary path that pyenv shims point to.
+
+    Environment Variables:
+        PYTHON_PATH: Optional override for Python interpreter path
 
     Returns:
         str: Absolute path to the real Python interpreter
     """
-    # First, try to get the current Python executable
+    # Check for explicit override first
+    env_python = os.getenv("PYTHON_PATH")
+    if env_python:
+        python_path = Path(env_python).expanduser()
+        if python_path.exists():
+            return str(python_path.resolve())
+
+    # Auto-detect: Get the current Python executable
     current_python = sys.executable
 
     # Check if we're using pyenv by looking for 'pyenv' in the path
@@ -86,9 +97,22 @@ def get_mcp_server_path() -> str:
     """
     Get the absolute path to this MCP server script.
 
+    Checks MCP_SERVER_PATH environment variable first, then auto-detects.
+
+    Environment Variables:
+        MCP_SERVER_PATH: Optional override for MCP server script path
+
     Returns:
         str: Absolute path to stdio_server.py
     """
+    # Check for explicit override first
+    env_server = os.getenv("MCP_SERVER_PATH")
+    if env_server:
+        server_path = Path(env_server).expanduser()
+        if server_path.exists():
+            return str(server_path.resolve())
+
+    # Auto-detect: Use the current script's path
     return str(Path(__file__).resolve())
 
 

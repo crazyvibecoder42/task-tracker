@@ -15,10 +15,15 @@
   "_comment_step_4b": "  Click 'Create New API Key' and copy the key",
   "_comment_step_4c": "  Note your User ID shown on the settings page",
   "_comment_step_5": "STEP 5: Edit .mcp.dev.json and replace placeholders below:",
-  "_comment_step_5a": "  - /ABSOLUTE/PATH/TO/python3 → your 'which python3' output",
-  "_comment_step_5b": "  - /ABSOLUTE/PATH/TO/.mcp-servers/stdio_server.py → /Users/YOURNAME/.mcp-servers/stdio_server.py",
-  "_comment_step_5c": "  - GET_API_KEY_FROM_SETTINGS → your actual API key from settings page",
-  "_comment_step_5d": "  - YOUR_USER_ID → your user ID from settings page",
+  "_comment_step_5a": "  OPTION 1 (Recommended): Use absolute paths in command/args",
+  "_comment_step_5b": "    - command: /ABSOLUTE/PATH/TO/python3 → your 'which python3' output",
+  "_comment_step_5c": "    - args: /ABSOLUTE/PATH/TO/.mcp-servers/stdio_server.py",
+  "_comment_step_5d": "  OPTION 2 (Advanced): Use environment variables for dynamic paths",
+  "_comment_step_5e": "    - Add PYTHON_PATH in env section (overrides auto-detection)",
+  "_comment_step_5f": "    - Add MCP_SERVER_PATH in env section (overrides auto-detection)",
+  "_comment_step_5g": "  Common: Replace these in env section:",
+  "_comment_step_5h": "    - GET_API_KEY_FROM_SETTINGS → your actual API key from settings page",
+  "_comment_step_5i": "    - YOUR_USER_ID → your user ID from settings page",
   "_comment_step_6": "STEP 6: Restart Claude Code for changes to take effect",
   "_comment_note": "NOTE: Do NOT commit .mcp.dev.json (it's gitignored). It contains your API key.",
   "_comment_separator": "───────────────────────────────────────────────────────────────────────────",
@@ -28,6 +33,26 @@
       "command": "/ABSOLUTE/PATH/TO/python3",
       "args": ["/ABSOLUTE/PATH/TO/.mcp-servers/stdio_server.py"],
       "env": {
+        "TASK_TRACKER_API_URL": "http://localhost:6002",
+        "TASK_TRACKER_API_KEY": "GET_API_KEY_FROM_SETTINGS",
+        "TASK_TRACKER_USER_ID": "YOUR_USER_ID"
+      }
+    }
+  },
+
+  "_comment_alternative": "═══════════════════════════════════════════════════════════════════════════",
+  "_comment_alternative_1": "         ALTERNATIVE: Using environment variables (Advanced users)         ",
+  "_comment_alternative_2": "═══════════════════════════════════════════════════════════════════════════",
+  "_comment_alternative_desc": "Use this approach if you want dynamic path resolution or portability",
+  "_comment_alternative_example": "Replace the mcpServers section above with this:",
+
+  "mcpServers_alternative": {
+    "task-tracker-dev": {
+      "command": "python3",
+      "args": ["stdio_server.py"],
+      "env": {
+        "PYTHON_PATH": "/Users/YOURNAME/.pyenv/versions/3.11.13/bin/python3",
+        "MCP_SERVER_PATH": "/Users/YOURNAME/.mcp-servers/stdio_server.py",
         "TASK_TRACKER_API_URL": "http://localhost:6002",
         "TASK_TRACKER_API_KEY": "GET_API_KEY_FROM_SETTINGS",
         "TASK_TRACKER_USER_ID": "YOUR_USER_ID"
