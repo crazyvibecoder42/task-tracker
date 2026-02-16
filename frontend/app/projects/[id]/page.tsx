@@ -484,14 +484,14 @@ export default function ProjectDetail() {
             filteredTasks.map((task) => (
               <div
                 key={task.id}
-                className="p-4 flex items-start gap-4 hover:bg-gray-50 transition-colors"
+                className="relative p-4 flex items-start gap-4 hover:bg-gray-50 transition-colors"
               >
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-3 mb-1">
                     <span className="font-mono text-sm text-gray-500">#{task.id}</span>
                     <Link
                       href={`/tasks/${task.id}`}
-                      className={`font-medium hover:text-indigo-600 ${
+                      className={`font-medium hover:text-indigo-600 before:absolute before:inset-0 ${
                         task.status === 'done' ? 'line-through text-gray-500' : 'text-gray-900'
                       }`}
                     >
@@ -562,7 +562,7 @@ export default function ProjectDetail() {
                 </div>
                 <button
                   onClick={() => handleDeleteTask(task.id)}
-                  className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg"
+                  className="relative z-10 p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg"
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>

@@ -2,12 +2,14 @@
 
 import { useEffect, useState, useRef } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { AlertCircle, Bug, Filter, Lightbulb, MessageSquare, Search, Sparkles } from 'lucide-react';
 import { getTasks, updateTask, isOverdue, Task } from '@/lib/api';
 import { STATUS_CONFIG, TaskStatus } from '@/components/StatusConfig';
 import { localDateToUTC } from '@/lib/date-utils';
 
 export default function TasksPage() {
+  const router = useRouter();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<string>('');
@@ -243,7 +245,7 @@ export default function TasksPage() {
             tasks.map((task) => (
               <div
                 key={task.id}
-                className="p-4 flex items-start gap-4 hover:bg-gray-50 transition-colors"
+                className="relative p-4 flex items-start gap-4 hover:bg-gray-50 transition-colors"
               >
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-3 mb-1">
@@ -255,7 +257,7 @@ export default function TasksPage() {
                     )}
                     <Link
                       href={`/tasks/${task.id}`}
-                      className={`font-medium hover:text-indigo-600 ${
+                      className={`font-medium hover:text-indigo-600 before:absolute before:inset-0 ${
                         task.status === 'done' ? 'line-through text-gray-500' : 'text-gray-900'
                       }`}
                     >
@@ -278,7 +280,7 @@ export default function TasksPage() {
                   <div className="flex items-center gap-2 mt-2">
                     <Link
                       href={`/projects/${task.project_id}`}
-                      className="text-xs text-indigo-600 hover:text-indigo-700"
+                      className="relative z-10 text-xs text-indigo-600 hover:text-indigo-700"
                     >
                       Project #{task.project_id}
                     </Link>
