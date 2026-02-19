@@ -50,7 +50,7 @@ export default function MarkdownRenderer({ content }: MarkdownRendererProps) {
                 {String(children).replace(/\n$/, '')}
               </SyntaxHighlighter>
             ) : (
-              <code className="bg-gray-100 text-red-600 px-1 py-0.5 rounded text-sm" {...props}>
+              <code className="bg-gray-100 text-red-600 px-1 py-0.5 rounded text-sm break-all" {...props}>
                 {children}
               </code>
             );
@@ -103,6 +103,26 @@ export default function MarkdownRenderer({ content }: MarkdownRendererProps) {
             <blockquote className="border-l-4 border-gray-300 pl-4 italic my-4" {...props}>
               {children}
             </blockquote>
+          ),
+          table: ({ node, children, ...props }: any) => (
+            <div className="overflow-x-auto my-4">
+              <table className="min-w-full border-collapse" {...props}>
+                {children}
+              </table>
+            </div>
+          ),
+          thead: ({ node, children, ...props }: any) => (
+            <thead className="bg-gray-50" {...props}>{children}</thead>
+          ),
+          th: ({ node, children, ...props }: any) => (
+            <th className="px-3 py-2 text-left text-sm font-semibold text-gray-700 border border-gray-200" {...props}>
+              {children}
+            </th>
+          ),
+          td: ({ node, children, ...props }: any) => (
+            <td className="px-3 py-2 text-sm text-gray-600 border border-gray-200 align-top" {...props}>
+              {children}
+            </td>
           ),
         }}
       >
