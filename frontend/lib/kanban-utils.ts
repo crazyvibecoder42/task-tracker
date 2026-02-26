@@ -2,7 +2,7 @@ import { Task, Author } from './api';
 
 export type GroupingType = 'status' | 'owner' | 'priority';
 
-export const STATUS_ORDER = ['backlog', 'todo', 'in_progress', 'blocked', 'review', 'done'];
+export const STATUS_ORDER = ['backlog', 'todo', 'in_progress', 'blocked', 'review', 'done', 'not_needed'];
 export const PRIORITY_ORDER = ['P0', 'P1'];
 
 /**
@@ -63,7 +63,8 @@ export function getColumnLabel(columnId: string, groupBy: GroupingType, tasks: T
       in_progress: 'In Progress',
       blocked: 'Blocked',
       review: 'Review',
-      done: 'Done'
+      done: 'Done',
+      not_needed: 'Not Needed'
     };
     return statusLabels[columnId] || columnId;
   } else if (groupBy === 'owner') {

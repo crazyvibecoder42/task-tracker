@@ -545,6 +545,7 @@ export default function TaskDetail() {
                   <option value="blocked">Blocked</option>
                   <option value="review">Review</option>
                   <option value="done">Done</option>
+                  <option value="not_needed">Not Needed</option>
                 </select>
               </div>
               {/* Time Tracking Fields */}
@@ -665,6 +666,7 @@ export default function TaskDetail() {
                           <option value="blocked">Blocked</option>
                           <option value="review">Review</option>
                           <option value="done">Done</option>
+                          <option value="not_needed">Not Needed</option>
                         </select>
                       </div>
                       <div className="flex items-center gap-2">

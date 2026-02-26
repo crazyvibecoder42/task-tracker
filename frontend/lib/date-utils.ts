@@ -106,14 +106,14 @@ export function formatDate(
  *
  * A task is overdue if:
  * - It has a due_date
- * - Status is not 'done' or 'backlog'
+ * - Status is not 'done', 'backlog', or 'not_needed'
  * - Due date is in the past
  *
  * @param task - Task object with due_date and status
  * @returns True if task is overdue
  */
 export function isOverdue(task: { due_date: string | null; status: string }): boolean {
-  if (!task.due_date || task.status === 'done' || task.status === 'backlog') {
+  if (!task.due_date || task.status === 'done' || task.status === 'backlog' || task.status === 'not_needed') {
     return false;
   }
   return new Date(task.due_date) < new Date();

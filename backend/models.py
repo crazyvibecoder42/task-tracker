@@ -39,6 +39,7 @@ class TaskStatus(str, enum.Enum):
     blocked = "blocked"
     review = "review"
     done = "done"
+    not_needed = "not_needed"
 
 
 class User(Base):

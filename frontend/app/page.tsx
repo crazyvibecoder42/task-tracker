@@ -297,6 +297,7 @@ export default function Dashboard() {
                                          task.status === 'blocked' ? 'text-red-500' :
                                          task.status === 'review' ? 'text-purple-500' :
                                          task.status === 'todo' ? 'text-blue-500' :
+                                         task.status === 'not_needed' ? 'text-slate-400' :
                                          'text-gray-500';
                       return <StatusIcon className={`w-4 h-4 ${statusColor}`} />;
                     })()}

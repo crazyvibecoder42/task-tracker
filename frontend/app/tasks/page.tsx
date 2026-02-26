@@ -159,6 +159,7 @@ export default function TasksPage() {
               <option value="blocked">Blocked</option>
               <option value="review">Review</option>
               <option value="done">Done</option>
+              <option value="not_needed">Not Needed</option>
             </select>
             <select
               value={priorityFilter}

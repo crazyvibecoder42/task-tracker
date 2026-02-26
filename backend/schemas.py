@@ -46,6 +46,7 @@ class TaskStatus(str, Enum):
     blocked = "blocked"
     review = "review"
     done = "done"
+    not_needed = "not_needed"
 
 
 # Role type aliases for validation
@@ -489,6 +490,7 @@ class ProjectStats(BaseModel):
     blocked_tasks: int
     review_tasks: int
     done_tasks: int
+    not_needed_tasks: int
     p0_tasks: int
     p1_tasks: int
     bug_count: int

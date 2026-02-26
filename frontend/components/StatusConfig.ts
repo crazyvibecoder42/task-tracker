@@ -1,4 +1,4 @@
-import { Inbox, Circle, PlayCircle, XCircle, Eye, CheckCircle2 } from 'lucide-react';
+import { Inbox, Circle, PlayCircle, XCircle, Eye, CheckCircle2, MinusCircle } from 'lucide-react';
 
 export const STATUS_CONFIG = {
   backlog: {
@@ -30,6 +30,11 @@ export const STATUS_CONFIG = {
     color: 'bg-green-100 text-green-700 border-green-300',
     icon: CheckCircle2,
     label: 'Done'
+  },
+  not_needed: {
+    color: 'bg-slate-100 text-slate-500 border-slate-300',
+    icon: MinusCircle,
+    label: 'Not Needed'
   }
 } as const;
 

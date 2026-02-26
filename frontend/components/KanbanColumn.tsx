@@ -3,7 +3,7 @@
 import { Task, KanbanSettings } from '@/lib/api';
 import { getWipStatus } from '@/lib/kanban-utils';
 import KanbanCard from './KanbanCard';
-import { Settings, Circle, Clock, CheckCircle, XCircle, AlertCircle, Archive } from 'lucide-react';
+import { Settings, Circle, Clock, CheckCircle, XCircle, AlertCircle, Archive, MinusCircle } from 'lucide-react';
 import { useDroppable } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
 
@@ -22,7 +22,8 @@ const STATUS_ICONS: Record<string, any> = {
   in_progress: Clock,
   blocked: XCircle,
   review: AlertCircle,
-  done: CheckCircle
+  done: CheckCircle,
+  not_needed: MinusCircle
 };
 
 export default function KanbanColumn({

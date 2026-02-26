@@ -1081,6 +1081,7 @@ def get_project_stats(
         blocked_tasks=sum(1 for t in tasks if t.status == models.TaskStatus.blocked),
         review_tasks=sum(1 for t in tasks if t.status == models.TaskStatus.review),
         done_tasks=sum(1 for t in tasks if t.status == models.TaskStatus.done),
+        not_needed_tasks=sum(1 for t in tasks if t.status == models.TaskStatus.not_needed),
         p0_tasks=sum(1 for t in tasks if t.priority == models.TaskPriority.P0),
         p1_tasks=sum(1 for t in tasks if t.priority == models.TaskPriority.P1),
         bug_count=sum(1 for t in tasks if t.tag == models.TaskTag.bug),
@@ -1735,8 +1736,9 @@ def calculate_is_blocked(db: Session, task_id: int) -> bool:
         .all()
 
     # Check if any blocking task is not done
-    is_blocked = any(bt.status != models.TaskStatus.done for bt in blocking_tasks)
-    logger.debug(f"Task {task_id} is_blocked={is_blocked} ({len([bt for bt in blocking_tasks if bt.status != models.TaskStatus.done])} incomplete blockers)")
+    terminal_statuses = {models.TaskStatus.done, models.TaskStatus.not_needed}
+    is_blocked = any(bt.status not in terminal_statuses for bt in blocking_tasks)
+    logger.debug(f"Task {task_id} is_blocked={is_blocked} ({len([bt for bt in blocking_tasks if bt.status not in terminal_statuses])} incomplete blockers)")
 
     return is_blocked
 
@@ -1840,9 +1842,10 @@ def bulk_calculate_is_blocked(db: Session, task_ids: list[int], batch_done_task_
     result = {}
     for task_id in task_ids:
         if task_id in blocked_by_map:
-            # Task is blocked if any of its blocking tasks are not done
+            # Task is blocked if any of its blocking tasks are not done or not_needed
+            terminal_statuses = {models.TaskStatus.done, models.TaskStatus.not_needed}
             result[task_id] = any(
-                status != models.TaskStatus.done
+                status not in terminal_statuses
                 for status in blocked_by_map[task_id]
             )
         else:
@@ -1920,7 +1923,7 @@ def list_tasks(
         now = utc_now()
         query = query.filter(
             models.Task.due_date < now,
-            models.Task.status.notin_([models.TaskStatus.done, models.TaskStatus.backlog])
+            models.Task.status.notin_([models.TaskStatus.done, models.TaskStatus.backlog, models.TaskStatus.not_needed])
         )
 
     # Full-text search if query provided
@@ -2151,7 +2154,8 @@ def get_actionable_tasks(
             models.Task.status.notin_([
             models.TaskStatus.backlog,
             models.TaskStatus.blocked,
-            models.TaskStatus.done
+            models.TaskStatus.done,
+            models.TaskStatus.not_needed
         ]))
 
     # Apply optional filters
@@ -2197,12 +2201,13 @@ def get_actionable_tasks(
 
             logger.debug(f"Task {task.id} has {len(blocking_tasks)} blocking task(s)")
 
-            # Task is actionable if all blocking tasks are done
-            if all(bt.status == models.TaskStatus.done for bt in blocking_tasks):
+            # Task is actionable if all blocking tasks are done or not_needed
+            terminal_statuses = {models.TaskStatus.done, models.TaskStatus.not_needed}
+            if all(bt.status in terminal_statuses for bt in blocking_tasks):
                 logger.debug(f"Task {task.id} is actionable, all blocking tasks completed")
                 actionable_tasks.append(task)
             else:
-                logger.debug(f"Task {task.id} is blocked by {sum(1 for bt in blocking_tasks if bt.status != models.TaskStatus.done)} incomplete task(s)")
+                logger.debug(f"Task {task.id} is blocked by {sum(1 for bt in blocking_tasks if bt.status not in terminal_statuses)} incomplete task(s)")
 
     logger.info(f"Found {len(actionable_tasks)} actionable tasks")
 
@@ -2275,7 +2280,7 @@ def get_overdue_tasks(
         .filter(
             models.Task.project_id.in_(accessible_project_ids),
             models.Task.due_date < now,
-            models.Task.status.notin_([models.TaskStatus.done, models.TaskStatus.backlog])
+            models.Task.status.notin_([models.TaskStatus.done, models.TaskStatus.backlog, models.TaskStatus.not_needed])
         )
 
     # Apply project filter if provided
@@ -2360,7 +2365,7 @@ def get_upcoming_tasks(
             models.Task.project_id.in_(accessible_project_ids),
             models.Task.due_date >= now,
             models.Task.due_date <= future_date,
-            models.Task.status.notin_([models.TaskStatus.done, models.TaskStatus.backlog])
+            models.Task.status.notin_([models.TaskStatus.done, models.TaskStatus.backlog, models.TaskStatus.not_needed])
         )
 
     # Apply project filter if provided
@@ -2532,7 +2537,8 @@ def get_task_progress(
     subtasks = db.query(models.Task).filter(models.Task.parent_task_id == task_id).all()
 
     total_subtasks = len(subtasks)
-    completed_subtasks = sum(1 for s in subtasks if s.status == models.TaskStatus.done)
+    terminal_statuses = {models.TaskStatus.done, models.TaskStatus.not_needed}
+    completed_subtasks = sum(1 for s in subtasks if s.status in terminal_statuses)
 
     completion_percentage = (completed_subtasks / total_subtasks * 100) if total_subtasks > 0 else 0.0
 
@@ -2570,10 +2576,10 @@ def update_task(
     if 'status' in update_data and update_data['status'] == models.TaskStatus.done:
         logger.debug(f"Validating completion of task {task_id}")
 
-        # Check if task has incomplete subtasks
+        # Check if task has incomplete subtasks (not_needed counts as complete)
         incomplete_subtasks = db.query(models.Task).filter(
             models.Task.parent_task_id == task_id,
-            models.Task.status != models.TaskStatus.done
+            models.Task.status.notin_([models.TaskStatus.done, models.TaskStatus.not_needed])
         ).count()
 
         if incomplete_subtasks > 0:
@@ -2984,6 +2990,7 @@ def get_overall_stats(
             "blocked_tasks": 0,
             "review_tasks": 0,
             "done_tasks": 0,
+            "not_needed_tasks": 0,
             "p0_incomplete": 0,
             "completion_rate": 0.0
         }
@@ -3024,9 +3031,14 @@ def get_overall_stats(
         models.Task.status == models.TaskStatus.done
     ).count()
 
+    not_needed_tasks = db.query(models.Task).filter(
+        models.Task.project_id.in_(accessible_project_ids),
+        models.Task.status == models.TaskStatus.not_needed
+    ).count()
+
     p0_incomplete = db.query(models.Task).filter(
         models.Task.project_id.in_(accessible_project_ids),
-        models.Task.status != models.TaskStatus.done,
+        models.Task.status.notin_([models.TaskStatus.done, models.TaskStatus.not_needed]),
         models.Task.priority == models.TaskPriority.P0
     ).count()
 
@@ -3039,8 +3051,9 @@ def get_overall_stats(
         "blocked_tasks": blocked_tasks,
         "review_tasks": review_tasks,
         "done_tasks": done_tasks,
+        "not_needed_tasks": not_needed_tasks,
         "p0_incomplete": p0_incomplete,
-        "completion_rate": round((done_tasks / total_tasks * 100) if total_tasks > 0 else 0, 1)
+        "completion_rate": round(((done_tasks + not_needed_tasks) / total_tasks * 100) if total_tasks > 0 else 0, 1)
     }
 
 
@@ -3428,8 +3441,9 @@ def get_task_dependencies(
 
     logger.debug(f"Found {len(blocked_tasks)} blocked task(s)")
 
-    # Calculate is_blocked: task is blocked if it has any blocking dependencies with status != done
-    is_blocked = any(bt.status != models.TaskStatus.done for bt in blocking_tasks)
+    # Calculate is_blocked: task is blocked if it has any blocking dependencies with status != done/not_needed
+    terminal_statuses = {models.TaskStatus.done, models.TaskStatus.not_needed}
+    is_blocked = any(bt.status not in terminal_statuses for bt in blocking_tasks)
     logger.info(f"Task {task_id} is_blocked={is_blocked}")
 
     # Convert to summary format with comment_count and is_blocked
@@ -4074,7 +4088,7 @@ def bulk_update_tasks(
         task_ids_with_subtasks = db.query(models.Task.parent_task_id)\
             .filter(
                 models.Task.parent_task_id.in_(bulk_update.task_ids),
-                models.Task.status != models.TaskStatus.done,
+                models.Task.status.notin_([models.TaskStatus.done, models.TaskStatus.not_needed]),
                 ~models.Task.id.in_(bulk_update.task_ids)  # Exclude tasks in the batch
             )\
             .distinct()\

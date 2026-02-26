@@ -25,7 +25,7 @@ export interface Task {
   description: string | null;
   tag: 'bug' | 'feature' | 'idea';
   priority: 'P0' | 'P1';
-  status: 'backlog' | 'todo' | 'in_progress' | 'blocked' | 'review' | 'done';
+  status: 'backlog' | 'todo' | 'in_progress' | 'blocked' | 'review' | 'done' | 'not_needed';
   project_id: number;
   author_id: number | null;
   author: Author | null;
@@ -151,6 +151,7 @@ export interface ProjectStats {
   blocked_tasks: number;
   review_tasks: number;
   done_tasks: number;
+  not_needed_tasks: number;
   p0_tasks: number;
   p1_tasks: number;
   bug_count: number;
@@ -167,6 +168,7 @@ export interface OverallStats {
   blocked_tasks: number;
   review_tasks: number;
   done_tasks: number;
+  not_needed_tasks: number;
   p0_incomplete: number;
   completion_rate: number;
 }
@@ -393,7 +395,7 @@ export const updateTask = (id: number, data: {
   description?: string;
   tag?: 'bug' | 'feature' | 'idea';
   priority?: 'P0' | 'P1';
-  status?: 'backlog' | 'todo' | 'in_progress' | 'blocked' | 'review' | 'done';
+  status?: 'backlog' | 'todo' | 'in_progress' | 'blocked' | 'review' | 'done' | 'not_needed';
   owner_id?: number | null;
   parent_task_id?: number;
   due_date?: string | null;

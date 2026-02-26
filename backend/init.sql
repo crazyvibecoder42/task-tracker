@@ -63,7 +63,7 @@ CREATE TYPE task_tag AS ENUM ('bug', 'feature', 'idea');
 CREATE TYPE task_priority AS ENUM ('P0', 'P1');
 
 -- Task status enum (6-status workflow)
-CREATE TYPE task_status AS ENUM ('backlog', 'todo', 'in_progress', 'blocked', 'review', 'done');
+CREATE TYPE task_status AS ENUM ('backlog', 'todo', 'in_progress', 'blocked', 'review', 'done', 'not_needed');
 
 -- Tasks table
 CREATE TABLE IF NOT EXISTS tasks (
