@@ -309,7 +309,7 @@ class TaskBase(BaseModel):
     description: Optional[str] = None
     tag: TaskTag = TaskTag.feature
     priority: TaskPriority = TaskPriority.P1
-    status: TaskStatus = TaskStatus.backlog  # Aligned with DB default in init.sql
+    status: TaskStatus = TaskStatus.todo  # Aligned with DB default in init.sql
     due_date: Optional[datetime] = None
     estimated_hours: Optional[float] = Field(None, ge=0, description="Estimated hours (must be >= 0)")
     actual_hours: Optional[float] = Field(None, ge=0, description="Actual hours spent (must be >= 0)")

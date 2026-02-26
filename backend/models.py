@@ -142,7 +142,7 @@ class Task(Base):
     description = Column(Text)
     tag = Column(Enum(TaskTag, name="task_tag", create_type=False), nullable=False, default=TaskTag.feature)
     priority = Column(Enum(TaskPriority, name="task_priority", create_type=False), nullable=False, default=TaskPriority.P1)
-    status = Column(Enum(TaskStatus, name="task_status", create_type=False), nullable=False, default=TaskStatus.backlog)
+    status = Column(Enum(TaskStatus, name="task_status", create_type=False), nullable=False, default=TaskStatus.todo)
     project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
     author_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
     owner_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"))

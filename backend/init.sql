@@ -72,7 +72,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     description TEXT,
     tag task_tag NOT NULL DEFAULT 'feature',
     priority task_priority NOT NULL DEFAULT 'P1',
-    status task_status NOT NULL DEFAULT 'backlog',
+    status task_status NOT NULL DEFAULT 'todo',
     project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     author_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     owner_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
