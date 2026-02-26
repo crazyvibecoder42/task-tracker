@@ -1855,7 +1855,7 @@ def bulk_calculate_is_blocked(db: Session, task_ids: list[int], batch_done_task_
 
 # ============== Tasks ==============
 
-@app.get("/api/tasks", response_model=List[schemas.TaskSummary])
+@app.get("/api/tasks")
 def list_tasks(
     current_user: models.User = Depends(get_current_user),
     project_id: Optional[int] = Query(None),
@@ -1868,22 +1868,26 @@ def list_tasks(
     overdue: Optional[bool] = Query(None, description="Filter overdue tasks (due_date < now, excludes done and backlog)"),
     q: Optional[str] = Query(None, description="Full-text search query"),
     sort_by: Optional[str] = Query(None, description="Sort field(s): created_at, updated_at, priority, status, rank (comma-separated, prefix with - for desc)"),
+    only_titles: bool = Query(False, description="Return only task IDs and titles (skips relationship loading for efficiency)"),
     limit: Optional[int] = Query(None, le=500, description="Optional limit for pagination (max 500)"),
     offset: int = Query(0, ge=0, description="Offset for pagination (only used with limit)"),
     db: Session = Depends(get_db)
 ):
     """List tasks (filtered by user's accessible projects)."""
-    logger.debug(f"User {current_user.id} listing tasks: q={q}, sort_by={sort_by}, filters: project={project_id}, status={status}, priority={priority}, tag={tag}, owner={owner_id}, due_before={due_before}, due_after={due_after}, overdue={overdue}")
+    logger.debug(f"User {current_user.id} listing tasks: q={q}, sort_by={sort_by}, only_titles={only_titles}, filters: project={project_id}, status={status}, priority={priority}, tag={tag}, owner={owner_id}, due_before={due_before}, due_after={due_after}, overdue={overdue}")
 
     # Get user's accessible projects
     accessible_project_ids = get_user_projects(current_user, db)
 
-    # Base query with eager loading
-    query = db.query(models.Task).options(
-        joinedload(models.Task.author),
-        joinedload(models.Task.owner),
-        joinedload(models.Task.comments)
-    )
+    # Base query: column-level when only_titles=True (skip relationship loading for efficiency)
+    if only_titles:
+        query = db.query(models.Task.id, models.Task.title)
+    else:
+        query = db.query(models.Task).options(
+            joinedload(models.Task.author),
+            joinedload(models.Task.owner),
+            joinedload(models.Task.comments)
+        )
 
     # Filter by accessible projects
     query = query.filter(models.Task.project_id.in_(accessible_project_ids))
@@ -1989,6 +1993,11 @@ def list_tasks(
 
     tasks = query.all()
     logger.debug(f"Retrieved {len(tasks)} tasks")
+
+    if only_titles:
+        result = [{"id": task.id, "title": task.title} for task in tasks]
+        logger.info(f"list_tasks (only_titles) completed successfully: returned {len(result)} tasks")
+        return result
 
     # Bulk calculate is_blocked for all tasks to avoid N+1 queries
     task_ids = [task.id for task in tasks]

@@ -269,6 +269,7 @@ async def list_tools() -> list[Tool]:
                  "due_before": {"type": "string", "description": "Filter tasks due before this datetime (ISO 8601 format, e.g., 2026-02-20T15:00:00Z)"},
                  "due_after": {"type": "string", "description": "Filter tasks due after this datetime (ISO 8601 format, e.g., 2026-02-10T00:00:00Z)"},
                  "overdue": {"type": "boolean", "description": "Filter to show only overdue tasks (due_date < now and status not in (done, backlog))"},
+                 "only_titles": {"type": "boolean", "description": "Return only task IDs and titles (skips relationship loading for efficiency)"},
                  "limit": {"type": "integer", "description": "Optional: Max tasks to return (no default, max: 500). Omit to get all tasks."},
                  "offset": {"type": "integer", "description": "Pagination offset (default: 0)"}
              }, "required": ["project_id"]}),
@@ -557,7 +558,7 @@ Example: list_tasks(project_id=4, status='todo', limit=10)"""
             }
         else:
             params = {}
-            for k in ["project_id", "status", "priority", "tag", "offset", "q", "sort_by", "due_before", "due_after", "overdue"]:
+            for k in ["project_id", "status", "priority", "tag", "offset", "q", "sort_by", "due_before", "due_after", "overdue", "only_titles"]:
                 if k in arguments: params[k] = arguments[k]
 
             # Only pass limit if explicitly provided (matches backend opt-in behavior)
