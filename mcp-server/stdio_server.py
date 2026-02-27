@@ -215,6 +215,75 @@ async def list_tools() -> list[Tool]:
                 "required": ["project_id", "team_id"]
             }
         ),
+        Tool(
+            name="list_subprojects",
+            description="List all sub-projects for a project, including inactive ones.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer", "description": "Project ID"}
+                },
+                "required": ["project_id"]
+            }
+        ),
+        Tool(
+            name="create_subproject",
+            description="Create a new sub-project. Sub-project number is auto-assigned.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer", "description": "Project ID"},
+                    "name": {"type": "string", "description": "Sub-project name"}
+                },
+                "required": ["project_id", "name"]
+            }
+        ),
+        Tool(
+            name="update_subproject",
+            description="Rename a sub-project. Can rename even the Default sub-project.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "subproject_id": {"type": "integer", "description": "Sub-project ID"},
+                    "name": {"type": "string", "description": "New sub-project name"}
+                },
+                "required": ["subproject_id", "name"]
+            }
+        ),
+        Tool(
+            name="delete_subproject",
+            description="Delete a sub-project. Tasks in it become unassigned (project is preserved). Cannot delete the Default sub-project.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "subproject_id": {"type": "integer", "description": "Sub-project ID"}
+                },
+                "required": ["subproject_id"]
+            }
+        ),
+        Tool(
+            name="list_active_subprojects",
+            description="List sub-projects that have at least one open (non-done, non-not_needed) task. Use this to find sub-projects with ongoing work.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer", "description": "Project ID"}
+                },
+                "required": ["project_id"]
+            }
+        ),
+        Tool(
+            name="list_actionable_tasks_in_subproject",
+            description="Return all actionable (todo, in_progress, review) tasks within a specific sub-project. Equivalent to list_actionable_tasks with a subproject_id filter. Use subproject_id=0 for unassigned tasks.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer", "description": "Project ID"},
+                    "subproject_id": {"type": "integer", "description": "Sub-project ID. Use 0 for unassigned tasks."}
+                },
+                "required": ["project_id", "subproject_id"]
+            }
+        ),
         Tool(name="list_teams", description="List all teams the user is a member of",
              inputSchema={"type": "object", "properties": {}, "required": []}),
         Tool(name="create_team", description="Create a new team (creator becomes admin)",
@@ -271,7 +340,8 @@ async def list_tools() -> list[Tool]:
                  "overdue": {"type": "boolean", "description": "Filter to show only overdue tasks (due_date < now and status not in (done, backlog))"},
                  "only_titles": {"type": "boolean", "description": "Return only task IDs and titles (skips relationship loading for efficiency)"},
                  "limit": {"type": "integer", "description": "Optional: Max tasks to return (no default, max: 500). Omit to get all tasks."},
-                 "offset": {"type": "integer", "description": "Pagination offset (default: 0)"}
+                 "offset": {"type": "integer", "description": "Pagination offset (default: 0)"},
+                 "subproject_id": {"type": "integer", "description": "Filter by sub-project. Use 0 for unassigned tasks (no sub-project)."}
              }, "required": ["project_id"]}),
         Tool(name="list_actionable_tasks", description="List actionable tasks (excludes backlog, blocked, and done tasks). Requires project_id to prevent cross-project queries (see CLAUDE.md).",
              inputSchema={"type": "object", "properties": {
@@ -280,7 +350,8 @@ async def list_tools() -> list[Tool]:
                  "tag": {"type": "string", "enum": ["bug", "feature", "idea"], "description": "Filter by tag"},
                  "owner_id": {"type": "integer", "description": "Filter by owner ID (use 0 for unassigned tasks)"},
                  "limit": {"type": "integer", "description": "Optional: Max tasks to return (no default, max: 500). Omit to get all tasks."},
-                 "offset": {"type": "integer", "description": "Pagination offset (default: 0)"}
+                 "offset": {"type": "integer", "description": "Pagination offset (default: 0)"},
+                 "subproject_id": {"type": "integer", "description": "Filter by sub-project. Use 0 for unassigned tasks (no sub-project)."}
              }, "required": ["project_id"]}),
         Tool(name="list_overdue_tasks", description="List tasks that are overdue (due_date < now and status not in (done, backlog))",
              inputSchema={"type": "object", "properties": {
@@ -316,7 +387,8 @@ async def list_tools() -> list[Tool]:
                  "due_date": {"type": "string", "description": "ISO 8601 datetime string (e.g., 2026-02-20T15:00:00Z)"},
                  "estimated_hours": {"type": "number", "description": "Estimated effort in hours (e.g., 5.5)"},
                  "author_id": {"type": "integer", "description": "Author ID (optional)"},
-                 "owner_id": {"type": "integer", "description": "Owner ID (optional)"}
+                 "owner_id": {"type": "integer", "description": "Owner ID (optional)"},
+                 "subproject_id": {"type": "integer", "description": "Optional sub-project ID. Must belong to the same project."}
              }, "required": ["project_id", "title"]}),
         Tool(name="get_task", description="Get a task by ID with all comments",
              inputSchema={"type": "object", "properties": {
@@ -333,7 +405,8 @@ async def list_tools() -> list[Tool]:
                  "due_date": {"type": "string", "description": "ISO 8601 datetime string (e.g., 2026-02-20T15:00:00Z)"},
                  "estimated_hours": {"type": "number", "description": "Estimated effort in hours (e.g., 5.5)"},
                  "actual_hours": {"type": "number", "description": "Actual effort spent in hours (e.g., 6.0)"},
-                 "owner_id": {"type": "integer", "description": "Owner ID (set to null to release ownership)"}
+                 "owner_id": {"type": "integer", "description": "Owner ID (set to null to release ownership)"},
+                 "subproject_id": {"type": ["integer", "null"], "description": "Reassign to a different sub-project. Pass 0 to unassign (set to no sub-project)."}
              }, "required": ["task_id"]}),
         Tool(name="complete_task", description="Mark a task as completed",
              inputSchema={"type": "object", "properties": {
@@ -568,6 +641,8 @@ Example: list_tasks(project_id=4, status='todo', limit=10)"""
             if "owner_id" in arguments:
                 # Special handling: 0 means filter for NULL owner_id
                 params["owner_id"] = None if arguments["owner_id"] == 0 else arguments["owner_id"]
+            if "subproject_id" in arguments:
+                params["subproject_id"] = arguments["subproject_id"]
             result = await api_request("GET", "/api/tasks", params)
     elif name == "list_actionable_tasks":
         # Validate project_id is provided
@@ -594,6 +669,8 @@ Example: list_actionable_tasks(project_id=4, priority='P0', limit=10)"""
             if "owner_id" in arguments:
                 # Special handling: 0 means filter for NULL owner_id
                 params["owner_id"] = None if arguments["owner_id"] == 0 else arguments["owner_id"]
+            if "subproject_id" in arguments:
+                params["subproject_id"] = arguments["subproject_id"]
             result = await api_request("GET", "/api/tasks/actionable", params)
     elif name == "list_overdue_tasks":
         params = {}
@@ -626,13 +703,16 @@ Example: list_actionable_tasks(project_id=4, priority='P0', limit=10)"""
         result = await api_request("GET", "/api/search", params)
     elif name == "create_task":
         data = {"project_id": arguments["project_id"], "title": arguments["title"]}
-        for k in ["description", "tag", "priority", "due_date", "estimated_hours", "author_id", "owner_id"]:
+        for k in ["description", "tag", "priority", "due_date", "estimated_hours", "author_id", "owner_id", "subproject_id"]:
             if k in arguments: data[k] = arguments[k]
         result = await api_request("POST", "/api/tasks", data)
     elif name == "get_task":
         result = await api_request("GET", f"/api/tasks/{arguments['task_id']}")
     elif name == "update_task":
-        data = {k: arguments[k] for k in ["title", "description", "tag", "priority", "status", "due_date", "estimated_hours", "actual_hours", "owner_id"] if k in arguments}
+        data = {k: arguments[k] for k in ["title", "description", "tag", "priority", "status", "due_date", "estimated_hours", "actual_hours", "owner_id", "subproject_id"] if k in arguments}
+        # Sentinel: 0 means unassign (set to null), same pattern as owner_id in list handlers
+        if data.get("subproject_id") == 0:
+            data["subproject_id"] = None
         result = await api_request("PUT", f"/api/tasks/{arguments['task_id']}", data)
     elif name == "complete_task":
         result = await api_request("PUT", f"/api/tasks/{arguments['task_id']}", {"status": "done"})
@@ -868,6 +948,24 @@ Server Path: {server_path}
         if "actor_id" in arguments:
             data["actor_id"] = arguments["actor_id"]
         result = await api_request("POST", "/api/tasks/bulk-add-dependencies", data)
+    elif name == "list_subprojects":
+        result = await api_request("GET", f"/api/projects/{arguments['project_id']}/subprojects")
+    elif name == "create_subproject":
+        data = {"name": arguments["name"]}
+        result = await api_request("POST", f"/api/projects/{arguments['project_id']}/subprojects", data)
+    elif name == "update_subproject":
+        data = {"name": arguments["name"]}
+        result = await api_request("PUT", f"/api/subprojects/{arguments['subproject_id']}", data)
+    elif name == "delete_subproject":
+        result = await api_request("DELETE", f"/api/subprojects/{arguments['subproject_id']}")
+    elif name == "list_active_subprojects":
+        result = await api_request("GET", f"/api/projects/{arguments['project_id']}/subprojects/active")
+    elif name == "list_actionable_tasks_in_subproject":
+        params = {
+            "project_id": arguments["project_id"],
+            "subproject_id": arguments["subproject_id"]
+        }
+        result = await api_request("GET", "/api/tasks/actionable", params)
     else:
         result = {"error": f"Unknown tool: {name}"}
 
