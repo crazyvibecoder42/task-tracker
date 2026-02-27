@@ -44,6 +44,8 @@ export interface Task {
   attachments?: Attachment[];
   external_links?: ExternalLink[];
   custom_metadata?: Record<string, string>;
+  subproject_id?: number | null;
+  subproject?: Subproject | null;
   created_at: string;
   updated_at: string;
 }
@@ -91,6 +93,16 @@ export interface Attachment {
 export interface ExternalLink {
   url: string;
   label: string | null;
+  created_at: string;
+}
+
+export interface Subproject {
+  id: number;
+  project_id: number;
+  name: string;
+  subproject_number: number;
+  is_default: boolean;
+  is_active: boolean;
   created_at: string;
 }
 
@@ -329,6 +341,25 @@ export const updateProject = (id: number, data: { name?: string; description?: s
   fetchApi<Project>('/api/projects/' + id, { method: 'PUT', body: JSON.stringify(data) });
 export const deleteProject = (id: number) =>
   fetchApi<void>('/api/projects/' + id, { method: 'DELETE' });
+
+// Subprojects
+export const getSubprojects = (projectId: number) =>
+  fetchApi<Subproject[]>(`/api/projects/${projectId}/subprojects`);
+
+export const createSubproject = (projectId: number, name: string) =>
+  fetchApi<Subproject>(`/api/projects/${projectId}/subprojects`, {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  });
+
+export const updateSubproject = (subprojectId: number, name: string) =>
+  fetchApi<Subproject>(`/api/subprojects/${subprojectId}`, {
+    method: 'PUT',
+    body: JSON.stringify({ name }),
+  });
+
+export const deleteSubproject = (subprojectId: number) =>
+  fetchApi<void>(`/api/subprojects/${subprojectId}`, { method: 'DELETE' });
 
 // Project Team Transfer
 export interface ProjectTeamTransfer {

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useRef } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import {
   AlertCircle,
@@ -36,7 +36,9 @@ import { localInputToUTC } from '@/lib/date-utils';
 export default function ProjectDetail() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const projectId = Number(params.id);
+  const activeSubprojectParam = searchParams?.get('subproject'); // null | '0' | numeric string
 
   const [project, setProject] = useState<Project | null>(null);
   const [stats, setStats] = useState<ProjectStats | null>(null);
@@ -172,8 +174,18 @@ export default function ProjectDetail() {
     }
   };
 
-  // Use search results if searching, otherwise use project tasks
-  const tasksToFilter = searchResults !== null ? searchResults : (project?.tasks || []);
+  // Apply subproject filter to a task list
+  const filterBySubproject = (tasks: Task[]) => {
+    if (activeSubprojectParam === null) return tasks;
+    if (activeSubprojectParam === '0') return tasks.filter(t => !t.subproject_id);
+    if (!/^[1-9]\d*$/.test(activeSubprojectParam)) return tasks; // invalid param → show all
+    return tasks.filter(t => t.subproject_id === Number(activeSubprojectParam));
+  };
+
+  // Use search results if searching, otherwise use project tasks; then apply subproject filter
+  const tasksToFilter = filterBySubproject(
+    searchResults !== null ? searchResults : (project?.tasks || [])
+  );
 
   const filteredTasks = tasksToFilter.filter((task) => {
     if (filter === 'all') return true;

@@ -1936,10 +1936,17 @@ def list_tasks(
             # Sentinel: return tasks with no sub-project assigned
             query = query.filter(models.Task.subproject_id.is_(None))
         else:
-            query = query.filter(models.Task.subproject_id == subproject_id)
             # Cross-project validation: if project_id also provided, ensure the subproject belongs to it
+            sp = db.query(models.Subproject).filter(models.Subproject.id == subproject_id).first()
+            if sp and sp.is_default:
+                # null subproject_id means "default" — include those tasks too
+                query = query.filter(
+                    (models.Task.subproject_id == subproject_id) |
+                    (models.Task.subproject_id.is_(None))
+                )
+            else:
+                query = query.filter(models.Task.subproject_id == subproject_id)
             if project_id:
-                sp = db.query(models.Subproject).filter(models.Subproject.id == subproject_id).first()
                 if not sp or sp.project_id != project_id:
                     raise HTTPException(status_code=400, detail="subproject_id does not belong to the specified project_id")
 
@@ -2223,10 +2230,17 @@ def get_actionable_tasks(
         if subproject_id == 0:
             query = query.filter(models.Task.subproject_id.is_(None))
         else:
-            query = query.filter(models.Task.subproject_id == subproject_id)
             # Cross-project validation: if project_id also provided, ensure the subproject belongs to it
+            sp = db.query(models.Subproject).filter(models.Subproject.id == subproject_id).first()
+            if sp and sp.is_default:
+                # null subproject_id means "default" — include those tasks too
+                query = query.filter(
+                    (models.Task.subproject_id == subproject_id) |
+                    (models.Task.subproject_id.is_(None))
+                )
+            else:
+                query = query.filter(models.Task.subproject_id == subproject_id)
             if project_id:
-                sp = db.query(models.Subproject).filter(models.Subproject.id == subproject_id).first()
                 if not sp or sp.project_id != project_id:
                     raise HTTPException(status_code=400, detail="subproject_id does not belong to the specified project_id")
 

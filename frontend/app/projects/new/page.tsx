@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft } from 'lucide-react';
 import { createProject, getTeams, getTeam, Team, TeamMember } from '@/lib/api';
@@ -9,7 +9,6 @@ import { useAuth } from '@/contexts/AuthContext';
 
 export default function NewProject() {
   const router = useRouter();
-  const searchParams = useSearchParams();
   const { user } = useAuth();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -25,11 +24,11 @@ export default function NewProject() {
       loadTeams();
     }
     // Pre-select team from query param
-    const teamParam = searchParams.get('team');
+    const teamParam = new URLSearchParams(window.location.search).get('team');
     if (teamParam) {
       setTeamId(teamParam);
     }
-  }, [searchParams, user?.id]);
+  }, [user?.id]);
 
   const loadTeams = async () => {
     console.debug('[NewProject] Loading teams');
