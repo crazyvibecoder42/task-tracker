@@ -1890,10 +1890,11 @@ def list_tasks(
     only_titles: bool = Query(False, description="Return only task IDs and titles (skips relationship loading for efficiency)"),
     limit: Optional[int] = Query(None, le=500, description="Optional limit for pagination (max 500)"),
     offset: int = Query(0, ge=0, description="Offset for pagination (only used with limit)"),
+    subproject_id: Optional[int] = Query(None, description="Filter by sub-project. Use 0 for unassigned tasks (subproject_id IS NULL)."),
     db: Session = Depends(get_db)
 ):
     """List tasks (filtered by user's accessible projects)."""
-    logger.debug(f"User {current_user.id} listing tasks: q={q}, sort_by={sort_by}, only_titles={only_titles}, filters: project={project_id}, status={status}, priority={priority}, tag={tag}, owner={owner_id}, due_before={due_before}, due_after={due_after}, overdue={overdue}")
+    logger.debug(f"User {current_user.id} listing tasks: q={q}, sort_by={sort_by}, only_titles={only_titles}, filters: project={project_id}, status={status}, priority={priority}, tag={tag}, owner={owner_id}, due_before={due_before}, due_after={due_after}, overdue={overdue}, subproject_id={subproject_id}")
 
     # Get user's accessible projects
     accessible_project_ids = get_user_projects(current_user, db)
@@ -1930,6 +1931,17 @@ def list_tasks(
             query = query.filter(models.Task.owner_id.is_(None))
         else:
             query = query.filter(models.Task.owner_id == owner_id)
+    if subproject_id is not None:
+        if subproject_id == 0:
+            # Sentinel: return tasks with no sub-project assigned
+            query = query.filter(models.Task.subproject_id.is_(None))
+        else:
+            query = query.filter(models.Task.subproject_id == subproject_id)
+            # Cross-project validation: if project_id also provided, ensure the subproject belongs to it
+            if project_id:
+                sp = db.query(models.Subproject).filter(models.Subproject.id == subproject_id).first()
+                if not sp or sp.project_id != project_id:
+                    raise HTTPException(status_code=400, detail="subproject_id does not belong to the specified project_id")
 
     # Time tracking filters
     if due_before:
@@ -2164,6 +2176,7 @@ def get_actionable_tasks(
     tag: Optional[schemas.TaskTag] = Query(None),
     limit: Optional[int] = Query(None, le=500, description="Optional limit for pagination (max 500)"),
     offset: int = Query(0, ge=0, description="Offset for pagination (only used with limit)"),
+    subproject_id: Optional[int] = Query(None, description="Filter by sub-project. Use 0 for unassigned tasks (subproject_id IS NULL)."),
     db: Session = Depends(get_db)
 ):
     """
@@ -2171,7 +2184,7 @@ def get_actionable_tasks(
     Returns tasks that are not in backlog, blocked, or done status and have no blocking dependencies
     or all blocking tasks are completed.
     """
-    logger.debug(f"User {current_user.id} getting actionable tasks with filters: project_id={project_id}, owner_id={owner_id}, priority={priority}, tag={tag}")
+    logger.debug(f"User {current_user.id} getting actionable tasks with filters: project_id={project_id}, owner_id={owner_id}, priority={priority}, tag={tag}, subproject_id={subproject_id}")
 
     # Get user's accessible projects
     accessible_project_ids = get_user_projects(current_user, db)
@@ -2206,6 +2219,16 @@ def get_actionable_tasks(
         query = query.filter(models.Task.priority == priority)
     if tag:
         query = query.filter(models.Task.tag == tag)
+    if subproject_id is not None:
+        if subproject_id == 0:
+            query = query.filter(models.Task.subproject_id.is_(None))
+        else:
+            query = query.filter(models.Task.subproject_id == subproject_id)
+            # Cross-project validation: if project_id also provided, ensure the subproject belongs to it
+            if project_id:
+                sp = db.query(models.Subproject).filter(models.Subproject.id == subproject_id).first()
+                if not sp or sp.project_id != project_id:
+                    raise HTTPException(status_code=400, detail="subproject_id does not belong to the specified project_id")
 
     # Add deterministic ordering for reliable pagination
     # Note: We fetch ALL matching tasks first, then apply pagination AFTER
@@ -5217,6 +5240,51 @@ def list_subprojects(
         ))
 
     logger.info(f"User {current_user.id} retrieved {len(result)} subprojects for project {project_id}")
+    return result
+
+
+@app.get("/api/projects/{project_id}/subprojects/active", response_model=List[schemas.SubprojectResponse])
+def list_active_subprojects(
+    project_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """List sub-projects that have at least one open task (status not in done/not_needed)."""
+    logger.debug(f"User {current_user.id} listing active subprojects for project {project_id}")
+
+    project = db.query(models.Project).filter(models.Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail=f"Project {project_id} not found")
+
+    require_project_permission(current_user, project_id, "viewer", db)
+
+    subprojects = db.query(models.Subproject).filter(
+        models.Subproject.project_id == project_id
+    ).order_by(models.Subproject.subproject_number).all()
+
+    excluded_statuses = [models.TaskStatus.done, models.TaskStatus.not_needed]
+    result = []
+    for sp in subprojects:
+        has_open_tasks = db.query(
+            exists().where(
+                and_(
+                    models.Task.subproject_id == sp.id,
+                    models.Task.status.notin_(excluded_statuses)
+                )
+            )
+        ).scalar()
+        if has_open_tasks:
+            result.append(schemas.SubprojectResponse(
+                id=sp.id,
+                project_id=sp.project_id,
+                name=sp.name,
+                subproject_number=sp.subproject_number,
+                is_default=sp.is_default,
+                is_active=True,
+                created_at=sp.created_at,
+            ))
+
+    logger.info(f"User {current_user.id} retrieved {len(result)} active subprojects for project {project_id}")
     return result
 
 
