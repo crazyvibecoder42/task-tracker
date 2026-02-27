@@ -393,6 +393,7 @@ export const getTasks = (params?: {
   due_before?: string;
   due_after?: string;
   overdue?: boolean;
+  subproject_id?: number;
 }) => {
   const searchParams = new URLSearchParams();
   if (params?.project_id) searchParams.append('project_id', String(params.project_id));
@@ -403,6 +404,7 @@ export const getTasks = (params?: {
   if (params?.due_before) searchParams.append('due_before', params.due_before);
   if (params?.due_after) searchParams.append('due_after', params.due_after);
   if (params?.overdue !== undefined) searchParams.append('overdue', String(params.overdue));
+  if (params?.subproject_id !== undefined && Number.isInteger(params.subproject_id)) searchParams.append('subproject_id', String(params.subproject_id));
   const query = searchParams.toString();
   return fetchApi<Task[]>('/api/tasks' + (query ? '?' + query : ''));
 };

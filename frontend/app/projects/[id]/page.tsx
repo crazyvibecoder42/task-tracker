@@ -22,6 +22,7 @@ import {
   getProjectStats,
   getTasks,
   getProjectMembers,
+  getSubprojects,
   createTask,
   updateTask,
   deleteTask,
@@ -29,7 +30,8 @@ import {
   Project,
   ProjectStats,
   Task,
-  Author
+  Author,
+  Subproject
 } from '@/lib/api';
 import { localInputToUTC } from '@/lib/date-utils';
 
@@ -39,10 +41,17 @@ export default function ProjectDetail() {
   const searchParams = useSearchParams();
   const projectId = Number(params.id);
   const activeSubprojectParam = searchParams?.get('subproject'); // null | '0' | numeric string
+  const activeSubprojectId = (() => {
+    if (activeSubprojectParam === null) return undefined;
+    if (activeSubprojectParam === '0') return 0;
+    if (/^[1-9]\d*$/.test(activeSubprojectParam)) return Number(activeSubprojectParam);
+    return undefined; // invalid param (e.g. 'abc') — treat as no filter
+  })();
 
   const [project, setProject] = useState<Project | null>(null);
   const [stats, setStats] = useState<ProjectStats | null>(null);
   const [authors, setAuthors] = useState<Author[]>([]);
+  const [subprojects, setSubprojects] = useState<Subproject[]>([]);
   const [loading, setLoading] = useState(true);
   const [showNewTask, setShowNewTask] = useState(false);
   const [filter, setFilter] = useState<'all' | TaskStatus>('all');
@@ -63,6 +72,9 @@ export default function ProjectDetail() {
     getProjectMembers(projectId)
       .then(members => setAuthors(members.map(m => m.user)))
       .catch(() => setAuthors([])); // Graceful degradation on error
+    getSubprojects(projectId)
+      .then(setSubprojects)
+      .catch(() => {});
   }, [projectId]);
 
   // Track search request ID to prevent race conditions
@@ -79,6 +91,7 @@ export default function ProjectDetail() {
         try {
           const results = await getTasks({
             project_id: projectId,
+            subproject_id: activeSubprojectId,
             q: searchQuery.trim()
           });
 
@@ -101,7 +114,12 @@ export default function ProjectDetail() {
       searchRequestIdRef.current++;
       setSearchResults(null);
     }
-  }, [searchQuery, projectId]);
+  }, [searchQuery, projectId, activeSubprojectId]);
+
+  // Clear search query when sub-project filter changes
+  useEffect(() => {
+    setSearchQuery('');
+  }, [activeSubprojectParam]);
 
   const loadProject = async () => {
     try {
@@ -330,7 +348,24 @@ export default function ProjectDetail() {
         <div className="p-4 border-b border-gray-200">
           {/* Header row with title and Add Task button */}
           <div className="flex items-center justify-between mb-3">
-            <h2 className="text-lg font-semibold">Tasks</h2>
+            <div className="flex items-center gap-2">
+              <h2 className="text-lg font-semibold">Tasks</h2>
+              {activeSubprojectId !== undefined && (
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 text-sm bg-indigo-100 text-indigo-700 rounded-full">
+                  {activeSubprojectId === 0
+                    ? 'Unassigned'
+                    : (subprojects.find(sp => sp.id === activeSubprojectId)?.name ?? `Sub-project ${activeSubprojectId}`)
+                  }
+                  <button
+                    onClick={() => router.replace(`/projects/${projectId}`)}
+                    className="ml-0.5 font-bold hover:text-indigo-900"
+                    title="Clear filter"
+                  >
+                    ×
+                  </button>
+                </span>
+              )}
+            </div>
             <button
               onClick={() => setShowNewTask(!showNewTask)}
               className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
