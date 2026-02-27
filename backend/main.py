@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException, Depends, Query, UploadFile, File, Re
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import func, or_, desc, asc, text
+from sqlalchemy import func, or_, desc, asc, text, exists, and_
 from sqlalchemy.sql import func as sql_func
 from typing import List, Optional, Literal
 from collections import deque
@@ -932,6 +932,19 @@ def remove_team_member(
 
 # ============== Projects ==============
 
+def _create_default_subproject(project_id: int, db: Session) -> models.Subproject:
+    """Creates the Default sub-project for a newly created project. Uses flush (not commit) — caller commits."""
+    sp = models.Subproject(
+        project_id=project_id,
+        name="Default",
+        subproject_number=1,
+        is_default=True
+    )
+    db.add(sp)
+    db.flush()
+    return sp
+
+
 @app.get("/api/projects", response_model=List[schemas.Project])
 def list_projects(
     current_user: models.User = Depends(get_current_user),
@@ -978,6 +991,9 @@ def create_project(
     db_project = models.Project(**project_data)
     db.add(db_project)
     db.flush()  # Get project ID without committing
+
+    # Create Default sub-project atomically with the project
+    _create_default_subproject(db_project.id, db)
 
     # Only create ProjectMember for personal projects (no team)
     # Team projects use team membership for access control
@@ -5157,4 +5173,158 @@ def bulk_add_dependencies(
         logger.error(f"Transaction failed during bulk add dependencies: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Bulk add dependencies failed: {str(e)}")
 
+
+# ============== Subprojects ==============
+
+@app.get("/api/projects/{project_id}/subprojects", response_model=List[schemas.SubprojectResponse])
+def list_subprojects(
+    project_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """List all sub-projects for a project, ordered by subproject_number."""
+    logger.debug(f"User {current_user.id} listing subprojects for project {project_id}")
+
+    project = db.query(models.Project).filter(models.Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail=f"Project {project_id} not found")
+
+    require_project_permission(current_user, project_id, "viewer", db)
+
+    subprojects = db.query(models.Subproject).filter(
+        models.Subproject.project_id == project_id
+    ).order_by(models.Subproject.subproject_number).all()
+
+    excluded_statuses = [models.TaskStatus.done, models.TaskStatus.not_needed]
+    result = []
+    for sp in subprojects:
+        is_active = db.query(
+            exists().where(
+                and_(
+                    models.Task.subproject_id == sp.id,
+                    models.Task.status.notin_(excluded_statuses)
+                )
+            )
+        ).scalar()
+        result.append(schemas.SubprojectResponse(
+            id=sp.id,
+            project_id=sp.project_id,
+            name=sp.name,
+            subproject_number=sp.subproject_number,
+            is_default=sp.is_default,
+            is_active=bool(is_active),
+            created_at=sp.created_at,
+        ))
+
+    logger.info(f"User {current_user.id} retrieved {len(result)} subprojects for project {project_id}")
+    return result
+
+
+@app.post("/api/projects/{project_id}/subprojects", response_model=schemas.SubprojectResponse, status_code=201)
+def create_subproject(
+    project_id: int,
+    subproject: schemas.SubprojectCreate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Create a new sub-project for a project."""
+    logger.debug(f"User {current_user.id} creating subproject '{subproject.name}' in project {project_id}")
+
+    project = db.query(models.Project).filter(models.Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail=f"Project {project_id} not found")
+
+    require_project_permission(current_user, project_id, "editor", db)
+
+    max_num = db.query(func.coalesce(func.max(models.Subproject.subproject_number), 0)).filter(
+        models.Subproject.project_id == project_id
+    ).scalar()
+    next_num = max_num + 1
+
+    db_sp = models.Subproject(
+        project_id=project_id,
+        name=subproject.name,
+        subproject_number=next_num,
+        is_default=False
+    )
+    db.add(db_sp)
+    db.commit()
+    db.refresh(db_sp)
+
+    logger.critical(f"Subproject created: '{db_sp.name}' (ID: {db_sp.id}) in project {project_id} by user {current_user.id}")
+    return schemas.SubprojectResponse(
+        id=db_sp.id,
+        project_id=db_sp.project_id,
+        name=db_sp.name,
+        subproject_number=db_sp.subproject_number,
+        is_default=db_sp.is_default,
+        is_active=False,  # newly created, no tasks
+        created_at=db_sp.created_at,
+    )
+
+
+@app.put("/api/subprojects/{subproject_id}", response_model=schemas.SubprojectResponse)
+def update_subproject(
+    subproject_id: int,
+    update: schemas.SubprojectUpdate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Rename a sub-project."""
+    logger.debug(f"User {current_user.id} updating subproject {subproject_id}")
+
+    sp = db.query(models.Subproject).filter(models.Subproject.id == subproject_id).first()
+    if not sp:
+        raise HTTPException(status_code=404, detail=f"Subproject {subproject_id} not found")
+
+    require_project_permission(current_user, sp.project_id, "editor", db)
+
+    sp.name = update.name
+    db.commit()
+    db.refresh(sp)
+
+    excluded_statuses = [models.TaskStatus.done, models.TaskStatus.not_needed]
+    is_active = db.query(
+        exists().where(
+            and_(
+                models.Task.subproject_id == sp.id,
+                models.Task.status.notin_(excluded_statuses)
+            )
+        )
+    ).scalar()
+
+    logger.critical(f"Subproject {subproject_id} renamed to '{sp.name}' by user {current_user.id}")
+    return schemas.SubprojectResponse(
+        id=sp.id,
+        project_id=sp.project_id,
+        name=sp.name,
+        subproject_number=sp.subproject_number,
+        is_default=sp.is_default,
+        is_active=bool(is_active),
+        created_at=sp.created_at,
+    )
+
+
+@app.delete("/api/subprojects/{subproject_id}", status_code=204)
+def delete_subproject(
+    subproject_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Delete a sub-project. Default sub-projects cannot be deleted."""
+    logger.debug(f"User {current_user.id} deleting subproject {subproject_id}")
+
+    sp = db.query(models.Subproject).filter(models.Subproject.id == subproject_id).first()
+    if not sp:
+        raise HTTPException(status_code=404, detail=f"Subproject {subproject_id} not found")
+
+    if sp.is_default:
+        raise HTTPException(status_code=403, detail="Cannot delete the Default sub-project")
+
+    require_project_permission(current_user, sp.project_id, "owner", db)
+
+    db.delete(sp)
+    db.commit()
+
+    logger.critical(f"Subproject {subproject_id} deleted by user {current_user.id}")
 
