@@ -304,6 +304,28 @@ class TaskEventsList(BaseModel):
     total_count: int
 
 
+# Subproject schemas
+class SubprojectCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+
+
+class SubprojectUpdate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+
+
+class SubprojectResponse(BaseModel):
+    id: int
+    project_id: int
+    name: str
+    subproject_number: int
+    is_default: bool
+    is_active: bool = False  # computed field, NOT a DB column — populated by endpoint logic
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 # Task schemas
 class TaskBase(BaseModel):
     title: str
@@ -320,6 +342,7 @@ class TaskCreate(TaskBase):
     project_id: int
     owner_id: Optional[int] = None
     parent_task_id: Optional[int] = None
+    subproject_id: Optional[int] = None
 
 
 class TaskUpdate(BaseModel):
@@ -333,6 +356,7 @@ class TaskUpdate(BaseModel):
     due_date: Optional[datetime] = None
     estimated_hours: Optional[float] = Field(None, ge=0, description="Estimated hours (must be >= 0)")
     actual_hours: Optional[float] = Field(None, ge=0, description="Actual hours spent (must be >= 0)")
+    subproject_id: Optional[int] = None
 
 
 class TakeOwnership(BaseModel):
@@ -347,6 +371,8 @@ class Task(TaskBase):
     owner_id: Optional[int]
     owner: Optional[User] = None
     parent_task_id: Optional[int] = None
+    subproject_id: Optional[int] = None
+    subproject: Optional['SubprojectResponse'] = None
     comments: List[Comment] = Field(default_factory=list)
     attachments: List[Attachment] = Field(default_factory=list)
     external_links: List[dict] = Field(default_factory=list)
@@ -375,6 +401,8 @@ class TaskSummary(BaseModel):
     owner_id: Optional[int]
     owner: Optional[User] = None
     parent_task_id: Optional[int] = None
+    subproject_id: Optional[int] = None
+    subproject: Optional['SubprojectResponse'] = None
     comment_count: int = 0
     is_blocked: bool = False
     created_at: datetime

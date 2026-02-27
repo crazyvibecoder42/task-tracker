@@ -1889,7 +1889,8 @@ def list_tasks(
         query = db.query(models.Task).options(
             joinedload(models.Task.author),
             joinedload(models.Task.owner),
-            joinedload(models.Task.comments)
+            joinedload(models.Task.comments),
+            joinedload(models.Task.subproject)
         )
 
     # Filter by accessible projects
@@ -2025,6 +2026,8 @@ def list_tasks(
             "owner_id": task.owner_id,
             "owner": task.owner,
             "parent_task_id": task.parent_task_id,
+            "subproject_id": task.subproject_id,
+            "subproject": task.subproject,
             "comment_count": len(task.comments),
             "is_blocked": is_blocked_map.get(task.id, False),
             "created_at": task.created_at,
@@ -2094,6 +2097,21 @@ def create_task(
             )
         logger.debug(f"Owner validation successful (user is project member)")
 
+    # Validate subproject_id if provided
+    if task.subproject_id is not None:
+        logger.debug(f"Validating subproject {task.subproject_id}")
+        subproject = db.query(models.Subproject).filter(models.Subproject.id == task.subproject_id).first()
+        if not subproject:
+            logger.info(f"Subproject {task.subproject_id} not found")
+            raise HTTPException(status_code=404, detail=f"Subproject with ID {task.subproject_id} not found")
+        if subproject.project_id != task.project_id:
+            logger.info(f"Subproject {task.subproject_id} belongs to project {subproject.project_id}, not {task.project_id}")
+            raise HTTPException(
+                status_code=400,
+                detail="Subproject must belong to the same project as the task"
+            )
+        logger.debug(f"Subproject validation successful")
+
     # SECURITY: Always use current_user.id, never trust author_id from request
     task_data = task.model_dump()
     task_data['author_id'] = current_user.id  # Force current user as author
@@ -2147,7 +2165,8 @@ def get_actionable_tasks(
         .options(
             joinedload(models.Task.author),
             joinedload(models.Task.owner),
-            joinedload(models.Task.comments)
+            joinedload(models.Task.comments),
+            joinedload(models.Task.subproject)
         )\
         .filter(
             models.Task.project_id.in_(accessible_project_ids),
@@ -2238,6 +2257,8 @@ def get_actionable_tasks(
             "owner_id": task.owner_id,
             "owner": task.owner,
             "parent_task_id": task.parent_task_id,
+            "subproject_id": task.subproject_id,
+            "subproject": task.subproject,
             "comment_count": len(task.comments),
             "is_blocked": False,
             "created_at": task.created_at,
@@ -2275,7 +2296,8 @@ def get_overdue_tasks(
         .options(
             joinedload(models.Task.author),
             joinedload(models.Task.owner),
-            joinedload(models.Task.comments)
+            joinedload(models.Task.comments),
+            joinedload(models.Task.subproject)
         )\
         .filter(
             models.Task.project_id.in_(accessible_project_ids),
@@ -2317,6 +2339,8 @@ def get_overdue_tasks(
             "owner_id": task.owner_id,
             "owner": task.owner,
             "parent_task_id": task.parent_task_id,
+            "subproject_id": task.subproject_id,
+            "subproject": task.subproject,
             "comment_count": len(task.comments),
             "created_at": task.created_at,
             "updated_at": task.updated_at,
@@ -2359,7 +2383,8 @@ def get_upcoming_tasks(
         .options(
             joinedload(models.Task.author),
             joinedload(models.Task.owner),
-            joinedload(models.Task.comments)
+            joinedload(models.Task.comments),
+            joinedload(models.Task.subproject)
         )\
         .filter(
             models.Task.project_id.in_(accessible_project_ids),
@@ -2402,6 +2427,8 @@ def get_upcoming_tasks(
             "owner_id": task.owner_id,
             "owner": task.owner,
             "parent_task_id": task.parent_task_id,
+            "subproject_id": task.subproject_id,
+            "subproject": task.subproject,
             "comment_count": len(task.comments),
             "created_at": task.created_at,
             "updated_at": task.updated_at,
@@ -2669,6 +2696,21 @@ def update_task(
                     detail=f"Cannot assign task to user {owner.email}: user is not a member of this project"
                 )
             logger.debug(f"Owner validation successful (user is project member)")
+
+    # Validate subproject_id if being changed
+    if 'subproject_id' in update_data and update_data['subproject_id'] is not None:
+        logger.debug(f"Validating subproject {update_data['subproject_id']}")
+        subproject = db.query(models.Subproject).filter(models.Subproject.id == update_data['subproject_id']).first()
+        if not subproject:
+            logger.info(f"Subproject {update_data['subproject_id']} not found")
+            raise HTTPException(status_code=404, detail=f"Subproject with ID {update_data['subproject_id']} not found")
+        if subproject.project_id != task.project_id:
+            logger.info(f"Subproject {update_data['subproject_id']} belongs to project {subproject.project_id}, not {task.project_id}")
+            raise HTTPException(
+                status_code=400,
+                detail="Subproject must belong to the same project as the task"
+            )
+        logger.debug(f"Subproject validation successful")
 
     # Track old values for event tracking
     old_values = {key: getattr(task, key) for key in update_data.keys()}

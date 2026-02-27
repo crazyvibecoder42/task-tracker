@@ -172,6 +172,23 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+-- ============== Sub-Projects ==============
+-- To apply to live environments without a full reset, run:
+--   ALTER TABLE subprojects ... (table creation cannot be done with ALTER; use CREATE TABLE below)
+--   ALTER TABLE tasks ADD COLUMN IF NOT EXISTS subproject_id INTEGER REFERENCES subprojects(id) ON DELETE SET NULL;
+
+CREATE TABLE IF NOT EXISTS subprojects (
+    id                 SERIAL PRIMARY KEY,
+    project_id         INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name               VARCHAR(255) NOT NULL,
+    subproject_number  INTEGER NOT NULL,
+    is_default         BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at         TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (project_id, subproject_number)
+);
+
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS subproject_id INTEGER REFERENCES subprojects(id) ON DELETE SET NULL;
+
 -- ============== Full-Text Search Setup ==============
 
 -- Function to update task search vector

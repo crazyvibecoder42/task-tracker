@@ -133,6 +133,22 @@ class Project(Base):
     author = relationship("User", back_populates="projects")
     team = relationship("Team", back_populates="projects")
     tasks = relationship("Task", back_populates="project", cascade="all, delete-orphan")
+    subprojects = relationship("Subproject", back_populates="project", cascade="all, delete-orphan")
+
+
+class Subproject(Base):
+    __tablename__ = "subprojects"
+
+    id                = Column(Integer, primary_key=True, index=True)
+    project_id        = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    name              = Column(String(255), nullable=False)
+    subproject_number = Column(Integer, nullable=False)
+    is_default        = Column(Boolean, nullable=False, default=False)
+    created_at        = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Relationships
+    project  = relationship("Project", back_populates="subprojects")
+    tasks    = relationship("Task", back_populates="subproject")
 
 
 class Task(Base):
@@ -148,6 +164,7 @@ class Task(Base):
     author_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
     owner_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
     parent_task_id = Column(Integer, ForeignKey("tasks.id", ondelete="CASCADE"))
+    subproject_id = Column(Integer, ForeignKey("subprojects.id", ondelete="SET NULL"), nullable=True)
     search_vector = Column(TSVECTOR)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -170,6 +187,7 @@ class Task(Base):
     # Subtask relationships (self-referential)
     parent_task = relationship("Task", remote_side=[id], back_populates="subtasks", foreign_keys=[parent_task_id])
     subtasks = relationship("Task", back_populates="parent_task", cascade="all, delete-orphan", foreign_keys=[parent_task_id])
+    subproject = relationship("Subproject", back_populates="tasks")
 
     # Dependency relationships (many-to-many through task_dependencies)
     blocking_dependencies = relationship(
