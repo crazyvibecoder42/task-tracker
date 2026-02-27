@@ -422,6 +422,7 @@ export const createTask = (data: {
   parent_task_id?: number;
   due_date?: string;
   estimated_hours?: number;
+  subproject_id?: number | null;
 }) => fetchApi<Task>('/api/tasks', { method: 'POST', body: JSON.stringify(data) });
 export const updateTask = (id: number, data: {
   title?: string;
@@ -434,6 +435,7 @@ export const updateTask = (id: number, data: {
   due_date?: string | null;
   estimated_hours?: number | null;
   actual_hours?: number | null;
+  subproject_id?: number | null;
 }) => fetchApi<Task>('/api/tasks/' + id, { method: 'PUT', body: JSON.stringify(data) });
 export const deleteTask = (id: number) =>
   fetchApi<void>('/api/tasks/' + id, { method: 'DELETE' });

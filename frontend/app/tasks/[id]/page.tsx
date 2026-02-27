@@ -48,10 +48,12 @@ import {
   removeExternalLink,
   updateMetadata,
   deleteMetadata,
+  getSubprojects,
   API_BASE,
   Task,
   Author,
-  TaskProgress
+  TaskProgress,
+  Subproject
 } from '@/lib/api';
 import { STATUS_CONFIG, TaskStatus } from '@/components/StatusConfig';
 import Timeline from '@/components/Timeline';
@@ -130,6 +132,8 @@ export default function TaskDetail() {
   const [editDueDate, setEditDueDate] = useState('');
   const [editEstimatedHours, setEditEstimatedHours] = useState('');
   const [editActualHours, setEditActualHours] = useState('');
+  const [subprojects, setSubprojects] = useState<Subproject[]>([]);
+  const [editSubprojectId, setEditSubprojectId] = useState<number | null>(null);
 
   useEffect(() => {
     loadTask();
@@ -143,6 +147,9 @@ export default function TaskDetail() {
       getProjectMembers(task.project_id)
         .then(members => setAuthors(members.map(m => m.user)))
         .catch(() => setAuthors([])); // Graceful degradation on error
+      getSubprojects(task.project_id)
+        .then(setSubprojects)
+        .catch(() => {});
     }
   }, [task?.project_id]);
 
@@ -160,6 +167,7 @@ export default function TaskDetail() {
       setEditDueDate(data.due_date ? utcToLocalInput(data.due_date) : '');
       setEditEstimatedHours(data.estimated_hours?.toString() || '');
       setEditActualHours(data.actual_hours?.toString() || '');
+      setEditSubprojectId(data.subproject_id ?? null);
     } catch (error) {
       console.error('Failed to load task:', error);
     } finally {
@@ -221,7 +229,8 @@ export default function TaskDetail() {
         status: editStatus,
         due_date: editDueDate ? localInputToUTC(editDueDate) : null,
         estimated_hours: editEstimatedHours !== '' ? parseFloat(editEstimatedHours) : null,
-        actual_hours: editActualHours !== '' ? parseFloat(editActualHours) : null
+        actual_hours: editActualHours !== '' ? parseFloat(editActualHours) : null,
+        subproject_id: editSubprojectId
       });
       setEditing(false);
       loadTask();
@@ -590,6 +599,24 @@ export default function TaskDetail() {
                   />
                 </div>
               </div>
+              {/* Sub-project Field */}
+              {subprojects.length > 0 && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Sub-project
+                  </label>
+                  <select
+                    value={editSubprojectId ?? ''}
+                    onChange={(e) => setEditSubprojectId(e.target.value ? Number(e.target.value) : null)}
+                    className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                  >
+                    <option value="">No sub-project</option>
+                    {subprojects.map(sp => (
+                      <option key={sp.id} value={sp.id}>{sp.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
               <div className="flex gap-2">
                 <button
                   type="submit"
@@ -724,6 +751,20 @@ export default function TaskDetail() {
                         </span>
                       )}
                     </div>
+                    {/* Sub-project Badge */}
+                    {task.subproject && (
+                      <div className="mt-2 flex items-center gap-2">
+                        <span className="text-sm text-gray-600">Sub-project:</span>
+                        <span className="inline-flex items-center px-2.5 py-0.5 text-sm rounded-full bg-violet-100 text-violet-700 border border-violet-200">
+                          {task.subproject.name}
+                        </span>
+                      </div>
+                    )}
+                    {!task.subproject && task.subproject_id === null && (
+                      <div className="mt-2 flex items-center gap-2">
+                        <span className="text-sm text-gray-500">Sub-project: <span className="italic">None</span></span>
+                      </div>
+                    )}
                   </div>
                 </div>
                 <div className="flex gap-2">

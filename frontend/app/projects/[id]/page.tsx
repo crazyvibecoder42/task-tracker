@@ -65,6 +65,7 @@ export default function ProjectDetail() {
   const [newPriority, setNewPriority] = useState<'P0' | 'P1'>('P1');
   const [newDueDate, setNewDueDate] = useState('');
   const [newEstimatedHours, setNewEstimatedHours] = useState('');
+  const [newSubprojectId, setNewSubprojectId] = useState<number | null>(null);
 
   useEffect(() => {
     loadProject();
@@ -148,7 +149,8 @@ export default function ProjectDetail() {
         tag: newTag,
         priority: newPriority,
         due_date: newDueDate ? localInputToUTC(newDueDate) : undefined,
-        estimated_hours: newEstimatedHours !== '' ? parseFloat(newEstimatedHours) : undefined
+        estimated_hours: newEstimatedHours !== '' ? parseFloat(newEstimatedHours) : undefined,
+        subproject_id: newSubprojectId ?? undefined,
       });
       setNewTitle('');
       setNewDescription('');
@@ -156,6 +158,7 @@ export default function ProjectDetail() {
       setNewPriority('P1');
       setNewDueDate('');
       setNewEstimatedHours('');
+      setNewSubprojectId(activeSubprojectId && activeSubprojectId > 0 ? activeSubprojectId : null);
       setShowNewTask(false);
       loadProject();
     } catch (error) {
@@ -367,7 +370,12 @@ export default function ProjectDetail() {
               )}
             </div>
             <button
-              onClick={() => setShowNewTask(!showNewTask)}
+              onClick={() => {
+                if (!showNewTask) {
+                  setNewSubprojectId(activeSubprojectId && activeSubprojectId > 0 ? activeSubprojectId : null);
+                }
+                setShowNewTask(!showNewTask);
+              }}
               className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
             >
               <Plus className="w-4 h-4" />
@@ -500,6 +508,24 @@ export default function ProjectDetail() {
                 />
               </div>
             </div>
+            {/* Sub-project Field */}
+            {subprojects.length > 0 && (
+              <div className="mt-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Sub-project
+                </label>
+                <select
+                  value={newSubprojectId ?? ''}
+                  onChange={(e) => setNewSubprojectId(e.target.value ? Number(e.target.value) : null)}
+                  className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                >
+                  <option value="">No sub-project</option>
+                  {subprojects.map(sp => (
+                    <option key={sp.id} value={sp.id}>{sp.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div className="mt-4 flex gap-2">
               <button
                 type="submit"
@@ -594,6 +620,11 @@ export default function ProjectDetail() {
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-700 border border-red-200">
                         <AlertCircle className="w-3 h-3" />
                         Blocked
+                      </span>
+                    )}
+                    {task.subproject && activeSubprojectParam === null && (
+                      <span className="inline-flex items-center px-2 py-0.5 text-xs rounded-full bg-violet-100 text-violet-700 border border-violet-200">
+                        {task.subproject.name}
                       </span>
                     )}
                     {task.author && (
