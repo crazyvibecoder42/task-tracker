@@ -52,6 +52,9 @@ coverage/
 # MCP - NEVER commit actual configs with API keys
 .mcp-servers/
 .playwright-mcp/
+# Agent identity file (machine-specific)
+.agent-repo-identity.json
+
 # Local config files (never commit - contain API keys)
 .mcp.json
 .mcp.local.json

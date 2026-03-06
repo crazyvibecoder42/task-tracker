@@ -2,7 +2,7 @@
 # Use with: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 # Or: make prod-start
 #
-# Ports: Frontend=3000, Backend=6001, Database=5432
+# Ports: Frontend=5466, Backend=6001, Database=5432
 # Database: tasktracker (volume: postgres_data)
 
 services:
@@ -31,7 +31,7 @@ services:
   frontend:
     container_name: task-tracker-frontend-prod
     ports:
-      - "3000:3000"
+      - "5466:3000"
     environment:
       NEXT_PUBLIC_API_URL: http://localhost:6001
 

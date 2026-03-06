@@ -44,8 +44,8 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:3000",     # Production frontend
-        "http://127.0.0.1:3000",     # Production frontend (IP)
+        "http://localhost:5466",     # Production frontend
+        "http://127.0.0.1:5466",     # Production frontend (IP)
         "http://localhost:3001",     # Development frontend
         "http://127.0.0.1:3001"      # Development frontend (IP)
     ],

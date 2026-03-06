@@ -4,6 +4,20 @@
 
 This repository contains the Task Tracker application with enhanced features for AI agent task management, including hierarchical subtasks and task dependencies.
 
+## Agent Identity
+
+When operating as an AI agent in this repository, read `.agent-repo-identity.json` at the project root to determine your identity:
+
+```
+/Users/delusionalmakubex/Documents/projects/experimental/task-tracker/.agent-repo-identity.json
+```
+
+This file provides:
+- `agent_id` / `name` — your identity for task ownership and attribution
+- `task_tracker_project` — the project name you are working within
+
+Use this identity when taking task ownership, creating tasks, or attributing work in the task tracker.
+
 ## Authentication
 
 The task tracker backend requires authentication for all API endpoints. Two authentication methods are supported:
@@ -496,7 +510,7 @@ The Task Tracker supports **separate production and development environments** t
 
 | Environment | Frontend | Backend | Database | DB Name | Volume |
 |-------------|----------|---------|----------|---------|--------|
-| **Production** | 3000 | 6001 | 5432 | tasktracker | postgres_data |
+| **Production** | 5466 | 6001 | 5432 | tasktracker | postgres_data |
 | **Development** | 3001 | 6002 | 5433 | tasktracker_dev | postgres_data_dev |
 
 ### Running the Application
@@ -514,7 +528,7 @@ This uses `docker-compose.override.yml` which provides development defaults auto
 
 **Make Commands (Recommended):**
 ```bash
-# Production (ports 3000/6001/5432)
+# Production (ports 5466/6001/5432)
 make prod-start      # Start production
 make prod-stop       # Stop production
 make prod-logs       # View logs
