@@ -14,7 +14,17 @@ export function middleware(request: NextRequest) {
   const refreshToken = request.cookies.get('refresh_token')?.value;
   const hasRefreshToken = !!refreshToken;
 
-  console.debug('[Middleware] Path:', pathname, 'Has refresh token:', hasRefreshToken);
+  // Detect if request is behind a proxy (ngrok, reverse proxy, etc.)
+  // When proxied, the refresh_token cookie is set on the backend's domain (e.g. localhost),
+  // not the proxy domain (e.g. xxxx.ngrok.io), so middleware can't see it.
+  // In this case, skip the redirect and let client-side AuthContext handle auth.
+  const isProxied = !!(
+    request.headers.get('x-forwarded-for') ||
+    request.headers.get('x-forwarded-host') ||
+    request.headers.get('x-forwarded-proto')
+  );
+
+  console.debug('[Middleware] Path:', pathname, 'Has refresh token:', hasRefreshToken, 'Proxied:', isProxied);
 
   // Check if the current path is public
   const isPublicRoute = publicRoutes.some((route) => pathname.startsWith(route));
@@ -25,6 +35,12 @@ export function middleware(request: NextRequest) {
   const isAuthRoute = authRoutes.some((route) => pathname.startsWith(route));
   if (isAuthRoute) {
     console.debug('[Middleware] Auth page access allowed');
+    return NextResponse.next();
+  }
+
+  // If behind a proxy, skip server-side redirect — client-side auth handles it
+  if (isProxied) {
+    console.debug('[Middleware] Proxied request, deferring auth check to client');
     return NextResponse.next();
   }
 
