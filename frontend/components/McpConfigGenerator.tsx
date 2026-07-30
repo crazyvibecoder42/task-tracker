@@ -62,8 +62,8 @@ export default function McpConfigGenerator({ apiKeys, userId, latestRawKey, late
     const config = {
       mcpServers: {
         'task-tracker': {
-          command: 'python3',
-          args: ['./mcp-server/stdio_server.py'],
+          command: 'uv',
+          args: ['run', 'mcp-server/stdio_server.py'],
           env: {
             TASK_TRACKER_API_URL: apiUrl,
             TASK_TRACKER_API_KEY: getConfigKey(),
@@ -221,13 +221,14 @@ export default function McpConfigGenerator({ apiKeys, userId, latestRawKey, late
             </div>
 
             <div>
-              <h4 className="font-semibold text-gray-900 mb-2">4. Install MCP Server</h4>
+              <h4 className="font-semibold text-gray-900 mb-2">4. Install uv</h4>
               <p className="mb-2">
-                Make sure you have the Task Tracker MCP server installed:
+                The MCP server runs via <code className="bg-gray-100 px-1 rounded">uv</code>, which automatically
+                installs the correct Python and dependencies (no manual pip install needed):
               </p>
               <pre className="bg-gray-900 text-green-400 p-3 rounded-lg overflow-x-auto text-xs">
-                cd mcp-server{'\n'}
-                pip install -r requirements.txt
+                brew install uv{'\n'}
+                # or: curl -LsSf https://astral.sh/uv/install.sh | sh
               </pre>
             </div>
 
@@ -240,8 +241,9 @@ export default function McpConfigGenerator({ apiKeys, userId, latestRawKey, late
 
             <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
               <p className="text-blue-900 text-xs">
-                <strong>Note:</strong> The MCP server requires Python 3.8+ and the MCP SDK.
-                See the project README for detailed installation instructions.
+                <strong>Note:</strong> Dependencies are declared in the server script (PEP 723) and resolved
+                automatically by <code className="bg-blue-100 px-1 rounded">uv run</code> on first launch.
+                Requires uv 0.4+ and works with any Python 3.10+.
               </p>
             </div>
           </div>

@@ -1,4 +1,14 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.10"
+# dependencies = [
+#     "mcp>=1.20.0,<2.0.0",
+#     "httpx>=0.27.0",
+#     "pydantic>=2.10.0,<3.0.0",
+#     "pydantic-core>=2.16.0",
+#     "eval-type-backport>=0.2.0",
+# ]
+# ///
 """
 Task Tracker MCP Server - STDIO Mode
 

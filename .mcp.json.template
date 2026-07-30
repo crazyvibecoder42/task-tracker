@@ -1,28 +1,13 @@
 {
-  "_comment_setup": "MCP Configuration Options",
-  "_comment_option_1": "Option 1: Use absolute paths (recommended for reliability)",
-  "_comment_option_2": "Option 2: Use environment variables PYTHON_PATH and MCP_SERVER_PATH",
-  "_comment_note": "Copy this file to .mcp.local.json and set your API key",
+  "_comment_setup": "Task Tracker MCP Configuration",
+  "_comment_requirements": "Requires 'uv' installed (brew install uv). Deps auto-resolve via PEP 723 metadata in stdio_server.py.",
+  "_comment_note": "Copy this file to .mcp.json (gitignored) and fill in your API key and user ID",
 
   "mcpServers": {
     "task-tracker": {
-      "command": "/ABSOLUTE/PATH/TO/python3",
-      "args": ["/ABSOLUTE/PATH/TO/.mcp-servers/stdio_server.py"],
+      "command": "uv",
+      "args": ["run", "mcp-server/stdio_server.py"],
       "env": {
-        "TASK_TRACKER_API_URL": "http://localhost:6001",
-        "TASK_TRACKER_API_KEY": "GET_API_KEY_FROM_SETTINGS",
-        "TASK_TRACKER_USER_ID": "YOUR_USER_ID"
-      }
-    }
-  },
-
-  "_alternative_using_env_vars": {
-    "task-tracker": {
-      "command": "python3",
-      "args": ["stdio_server.py"],
-      "env": {
-        "PYTHON_PATH": "/Users/YOURNAME/.pyenv/versions/3.11.13/bin/python3",
-        "MCP_SERVER_PATH": "/Users/YOURNAME/.mcp-servers/stdio_server.py",
         "TASK_TRACKER_API_URL": "http://localhost:6001",
         "TASK_TRACKER_API_KEY": "GET_API_KEY_FROM_SETTINGS",
         "TASK_TRACKER_USER_ID": "YOUR_USER_ID"

@@ -52,6 +52,7 @@ coverage/
 # MCP - NEVER commit actual configs with API keys
 .mcp-servers/
 .playwright-mcp/
+.codex/config.toml
 # Agent identity file (machine-specific)
 .agent-repo-identity.json
 
@@ -80,3 +81,4 @@ backend/uploads/
 *-test.txt
 tasks-*.txt
 .mcp.local.json
+opencode.json
